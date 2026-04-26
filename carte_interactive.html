@@ -1,0 +1,695 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Carte Interactive</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%;width:100%;background:#07080f;overflow:hidden;font-family:'Segoe UI',system-ui,sans-serif}
+#app{display:flex;height:100vh;width:100vw}
+
+/* MAP */
+#mw{flex:1;position:relative;overflow:hidden;cursor:grab}
+#mw.drag{cursor:grabbing}
+#mi{position:absolute;transform-origin:0 0;will-change:transform}
+/* SVG rendu net à tous les niveaux de zoom */
+#mi svg{display:block;shape-rendering:geometricPrecision;text-rendering:geometricPrecision}
+
+/* PANEL */
+#panel{width:0;min-width:0;background:#0d0d1a;border-left:1px solid #1a1a2e;display:flex;flex-direction:column;overflow:hidden;transition:width .28s cubic-bezier(.4,0,.2,1);flex-shrink:0}
+#panel.open{width:340px;min-width:340px}
+#ps{flex:1;overflow-y:auto;overflow-x:hidden}
+#ps::-webkit-scrollbar{width:4px}
+#ps::-webkit-scrollbar-thumb{background:#2a2a42;border-radius:2px}
+
+/* Panel header */
+#ph{padding:14px 18px 12px;border-bottom:1px solid #1a1a2e;display:flex;align-items:flex-start;gap:10px;position:sticky;top:0;background:#0d0d1a;z-index:1;flex-shrink:0}
+#ph-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0;margin-top:4px}
+#ph-t{flex:1;min-width:0}
+#ph-name{font-size:15px;font-weight:700;color:#e8e0cc;line-height:1.3}
+#ph-nation{font-size:11px;color:#444460;margin-top:2px}
+#ph-close{background:none;border:none;color:#333;cursor:pointer;font-size:22px;line-height:1;padding:0 2px;transition:color .15s;flex-shrink:0}
+#ph-close:hover{color:#888}
+
+/* Panel body */
+#pb{padding:16px 18px 28px}
+#pb-imgwrap{width:100%;aspect-ratio:16/9;border-radius:6px;overflow:hidden;margin-bottom:14px;background:#111125;display:flex;align-items:center;justify-content:center}
+#pb-imgwrap img{width:100%;height:100%;object-fit:cover;display:none}
+#pb-imgwrap span{color:#252540;font-size:12px}
+#pb-desc{font-size:13px;line-height:1.75;color:#9a9280;margin-bottom:16px}
+#pb-chars{display:flex;flex-direction:column}
+.cr{display:flex;gap:10px;align-items:baseline;padding:8px 0;border-bottom:1px solid #111122}
+.cr:last-child{border-bottom:none}
+.cl{font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#3a3a55;flex-shrink:0;width:110px}
+.cv{font-size:12.5px;color:#706878;line-height:1.5;flex:1}
+.d1{color:#4a8a4a}.d2{color:#7a8a4a}.d3{color:#8a7a3a}.d4{color:#8a5a3a}.d5{color:#8a3a3a}
+
+/* Controls */
+/* Filtre de niveau */
+#filter-bar{position:absolute;top:14px;left:50%;transform:translateX(-50%);z-index:10;display:flex;gap:6px;background:rgba(10,10,20,0.88);border:1px solid #1e1e35;border-radius:10px;padding:6px 8px;backdrop-filter:blur(6px)}
+.fb{display:flex;align-items:center;gap:7px;padding:6px 14px;border-radius:7px;cursor:pointer;border:1px solid transparent;transition:background .15s,border-color .15s;user-select:none}
+.fb input[type=radio]{display:none}
+.fb-icon{font-size:15px;line-height:1}
+.fb-label{font-size:11px;letter-spacing:.5px;color:#555;white-space:nowrap;transition:color .15s}
+.fb.active{background:#161628;border-color:#3a3a5a}
+.fb.active .fb-label{color:#c8c0d8}
+.fb:hover:not(.active){background:#0f0f20}
+.fb:hover:not(.active) .fb-label{color:#888}
+/* Contrôles zoom */
+#ctrls{position:absolute;right:14px;bottom:14px;display:flex;flex-direction:column;gap:6px;z-index:5}
+.cb{width:34px;height:34px;background:#0d0d1a;border:1px solid #1e1e35;border-radius:6px;color:#555;font-size:17px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background .15s,color .15s}
+.cb:hover{background:#181828;color:#bbb}
+#zlvl{font-size:10px;text-align:center;color:#2a2a3a;font-family:monospace;padding:2px 0}
+
+/* Loading */
+#loading{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;z-index:20;background:#07080f}
+#lbar{width:160px;height:2px;background:#111125;border-radius:1px;overflow:hidden}
+#lfill{height:100%;background:#4a4a8a;width:0%;transition:width .3s}
+#loading p{font-size:11px;letter-spacing:1.5px;color:#2a2a4a}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="mw">
+    <div id="loading"><div id="lbar"><div id="lfill"></div></div><p>CHARGEMENT DE LA CARTE…</p></div>
+    <div id="mi"></div>
+
+    <!-- Filtre de niveau -->
+    <div id="filter-bar">
+      <label class="fb active" id="fb0">
+        <input type="radio" name="level" value="0" checked>
+        <span class="fb-icon">🌍</span>
+        <span class="fb-label">Grandes régions</span>
+      </label>
+      <label class="fb" id="fb1">
+        <input type="radio" name="level" value="1">
+        <span class="fb-icon">⚔️</span>
+        <span class="fb-label">Nations &amp; zones indépendantes</span>
+      </label>
+      <label class="fb" id="fb2">
+        <input type="radio" name="level" value="2">
+        <span class="fb-icon">📍</span>
+        <span class="fb-label">Zones précises</span>
+      </label>
+    </div>
+    <div id="ctrls">
+      <button class="cb" id="zi">+</button>
+      <div id="zlvl">100%</div>
+      <button class="cb" id="zo">−</button>
+      <button class="cb" id="zr" style="font-size:12px">⌂</button>
+    </div>
+  </div>
+  <div id="panel">
+    <div id="ps">
+      <div id="ph">
+        <div id="ph-dot"></div>
+        <div id="ph-t"><div id="ph-name"></div><div id="ph-nation"></div></div>
+        <button id="ph-close" onclick="closePanel()">×</button>
+      </div>
+      <div id="pb">
+        <div id="pb-imgwrap"><img id="pb-img" alt=""><span id="pb-ph">Aucune illustration</span></div>
+        <div id="pb-desc"></div>
+        <div id="pb-chars"></div>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+// ═══════════════════════════════════════════════════════════════════════════════
+//  DONNÉES DES RÉGIONS — éditez librement cette section
+//
+//  Champs :
+//    name        Nom affiché
+//    nation      Appartenance (région / pays parent)
+//    color       Couleur du point et du survol (hex)
+//    desc        Description libre
+//    image       URL d'illustration (laisser "" si aucune)
+//    population  Ex: "~12 000"
+//    races       Ex: "Insectes, Araignées"
+//    environment Ex: "Forêt, Cavernes"
+//    danger      Entier 1–5  (1=sûr, 5=mortel)
+//    characters  Personnages notables
+//    places      Lieux notables
+// ═══════════════════════════════════════════════════════════════════════════════
+const REGIONS = {
+
+// ─── PRIMAL LANDS ─────────────────────────────────────────────────────────────
+"Border_PrimalLands":{name:"Primal Lands",nation:"Région principale",color:"#c17a3a",desc:"Terres ancestrales brûlantes, dominées par des tribus primitives et des créatures colossales issues des âges les plus reculés.",image:"",population:"Inconnue",races:"Tribus primitives, Mantidés, Scorpions",environment:"Désert de sable, Cavernes de magma, Ruines englouties",danger:5,characters:"—",places:"Sea of Sands, Magma Vents, Memorial Pillars"},
+"Border_SeaOfSands":{name:"Sea of Sands",nation:"Primal Lands",color:"#c17a3a",desc:"Un océan de sable rouge s'étendant à perte de vue, parsemé de ruines à demi enfouies et de carcasses de créatures colossales.",image:"",population:"~500 (tribus nomades)",races:"Scorpions, Mantidés, Guêpes-tarentules",environment:"Désert aride, Dunes, Ruines",danger:4,characters:"—",places:"Rod Cavern, Diamond Mantis Tribe, Fertile Wastes"},
+"Border_RodCavern":{name:"Rod Cavern",nation:"Sea of Sands — Primal Lands",color:"#c17a3a",desc:"Cavernes creusées dans la roche rouge par des générations de mineurs primitifs, maintenant infestées de créatures des profondeurs.",image:"",population:"—",races:"Créatures des cavernes",environment:"Cavernes souterraines",danger:4,characters:"—",places:"—"},
+"Border_Viaduct":{name:"Viaduct",nation:"Sea of Sands — Primal Lands",color:"#c17a3a",desc:"Ancien viaduc de pierre enjambant un gouffre béant, vestige d'une civilisation disparue.",image:"",population:"—",races:"—",environment:"Ruines, Précipices",danger:3,characters:"—",places:"—"},
+"Border_PreyTerritory":{name:"Prey Territory",nation:"Sea of Sands — Primal Lands",color:"#c17a3a",desc:"Territoire de chasse des prédateurs apex du désert. S'y aventurer sans préparation est suicidaire.",image:"",population:"—",races:"Prédateurs apex",environment:"Désert, Territoire de chasse",danger:5,characters:"—",places:"—"},
+"Border_DiamondMantisTribe":{name:"Diamond Mantis Tribe",nation:"Sea of Sands — Primal Lands",color:"#c17a3a",desc:"Territoire de la tribu des Mantidés Diamant, guerrières redoutables dont les carapaces réfléchissent la lumière comme des gemmes.",image:"",population:"~200",races:"Mantidés Diamant",environment:"Désert, Camps fortifiés",danger:4,characters:"Grande Mantide Diamant",places:"—"},
+"Border_FertileWastes":{name:"Fertile Wastes",nation:"Sea of Sands — Primal Lands",color:"#c17a3a",desc:"Paradoxe vivant : une oasis de végétation luxuriante au cœur du désert, nourrie par des sources souterraines mystérieuses.",image:"",population:"~300",races:"Insectes divers",environment:"Oasis, Végétation dense",danger:2,characters:"—",places:"—"},
+"Border_FyrWyrmsLair":{name:"Fyr Wyrm's Lair",nation:"Sea of Sands — Primal Lands",color:"#c17a3a",desc:"Antre du Wyrm de Feu, une créature colossale dont le souffle peut vitrifier le sable en secondes.",image:"",population:"1 (le Wyrm)",races:"Wyrm de Feu",environment:"Cavernes de lave",danger:5,characters:"Fyr Wyrm",places:"—"},
+"Border_DeepRuins":{name:"Deep Ruins",nation:"Sea of Sands — Primal Lands",color:"#c17a3a",desc:"Ruines enfouies d'une civilisation antérieure aux Primal Lands, dont l'origine reste un mystère complet.",image:"",population:"—",races:"Esprits anciens",environment:"Ruines souterraines",danger:4,characters:"—",places:"—"},
+"Border_MagmaVents":{name:"Magma Vents",nation:"Sea of Sands — Primal Lands",color:"#c17a3a",desc:"Zone de ventilation volcanique où des geysers de magma jaillissent aléatoirement.",image:"",population:"—",races:"Créatures de feu",environment:"Volcanique, Lave",danger:5,characters:"—",places:"—"},
+"Border_DeadDream":{name:"Dead Dream",nation:"Sea of Sands — Primal Lands",color:"#c17a3a",desc:"Espace onirique figé, vestige d'un rêve collectif interrompu. La frontière entre le réel et l'imaginaire y est inexistante.",image:"",population:"—",races:"Êtres de rêve",environment:"Dimension onirique",danger:4,characters:"—",places:"—"},
+"Border_MessorTribe":{name:"Messor Tribe",nation:"Sea of Sands — Primal Lands",color:"#c17a3a",desc:"Territoire de la tribu Messor, fourmis géantes organisées en colonies militaires disciplinées.",image:"",population:"~2000",races:"Fourmis Messor",environment:"Tunnels, Colonies souterraines",danger:3,characters:"Reine Messor",places:"—"},
+"Border_ObsidianMines":{name:"Obsidian Mines",nation:"Sea of Sands — Primal Lands",color:"#c17a3a",desc:"Mines d'obsidienne taillées à même la roche volcanique. L'obsidienne extraite ici est d'une pureté exceptionnelle.",image:"",population:"~150 (mineurs)",races:"Insectes ouvriers",environment:"Mines, Cavernes volcaniques",danger:3,characters:"—",places:"—"},
+"Border_MemorialPillars":{name:"Memorial Pillars",nation:"Sea of Sands — Primal Lands",color:"#c17a3a",desc:"Forêt de piliers de pierre gravés de noms et de symboles, mémorial d'une guerre ancienne dont personne ne se souvient plus.",image:"",population:"—",races:"—",environment:"Monument, Plaine aride",danger:2,characters:"—",places:"—"},
+"Border_ScorpionTribe":{name:"Scorpion Tribe",nation:"Sea of Sands — Primal Lands",color:"#c17a3a",desc:"Territoire des Scorpions Rouges, guerriers nomades dont le venin peut dissoudre l'acier.",image:"",population:"~400",races:"Scorpions Rouges",environment:"Désert, Dunes",danger:5,characters:"Le Grand Scorpion",places:"—"},
+"Border_TrainingGrounds":{name:"Training Grounds",nation:"Sea of Sands — Primal Lands",color:"#c17a3a",desc:"Arène naturelle où les tribus des Primal Lands s'affrontent pour prouver leur valeur et établir leur hiérarchie.",image:"",population:"Variable",races:"Toutes tribus",environment:"Arène, Désert",danger:4,characters:"—",places:"—"},
+"Border_TarantulaHawkWaspsTribe":{name:"Tarantula Hawk Wasps Tribe",nation:"Sea of Sands — Primal Lands",color:"#c17a3a",desc:"Territoire des Guêpes-Faucon, chasseuses redoutables qui paralysent leurs proies pour les nourrir à leurs larves.",image:"",population:"~600",races:"Guêpes-Faucon-Tarentule",environment:"Désert, Terriers",danger:5,characters:"Reine des Guêpes-Faucon",places:"—"},
+"Border_Jupiter":{name:"Jupiter",nation:"Primal Lands",color:"#c17a3a",desc:"Territoire mystérieux aux confins des Primal Lands, où la gravité semble obéir à des règles différentes.",image:"",population:"Inconnue",races:"Inconnues",environment:"Inconnu",danger:5,characters:"—",places:"—"},
+"Border_Agnosia":{name:"Agnosia",nation:"Primal Lands",color:"#c17a3a",desc:"Terre de l'ignorance absolue. Ceux qui s'y aventurent perdent progressivement leurs souvenirs et leur sens de l'orientation.",image:"",population:"—",races:"—",environment:"Plaines nébuleuses",danger:4,characters:"—",places:"—"},
+"Border_Karnaval":{name:"Karnaval",nation:"Primal Lands",color:"#c17a3a",desc:"Un étrange carnaval permanent peuplé de créatures masquées dont les intentions sont impossibles à déchiffrer.",image:"",population:"~800",races:"Créatures masquées",environment:"Fête foraine, Tentes",danger:3,characters:"Le Grand Maître du Karnaval",places:"—"},
+"Border_LostCapital":{name:"Lost Capital",nation:"Primal Lands",color:"#c17a3a",desc:"Capitale d'un empire oublié, engloutie par les sables. Ses palais et ses tours percent encore la surface par endroits.",image:"",population:"—",races:"Esprits, Automates anciens",environment:"Cité en ruines, Désert",danger:4,characters:"—",places:"—"},
+"Border_DoomedWastelands":{name:"Doomed Wastelands",nation:"Primal Lands",color:"#c17a3a",desc:"Terres maudites où aucune créature vivante ne survit plus de quelques jours. L'air lui-même semble consumé.",image:"",population:"—",races:"—",environment:"Terres mortes",danger:5,characters:"—",places:"—"},
+"Border_Nirvane":{name:"Nirvane",nation:"Primal Lands",color:"#c17a3a",desc:"Lieu de paix absolue où les conflits cessent spontanément. On dit que c'est là que vont les âmes les plus méritantes.",image:"",population:"—",races:"Âmes purifiées",environment:"Paradis, Lumière éternelle",danger:1,characters:"—",places:"—"},
+"Border_MagmaticChamber":{name:"Magmatic Chamber",nation:"Primal Lands",color:"#c17a3a",desc:"Chambre magmatique titanesque, cœur volcanique des Primal Lands. La chaleur y est absolue et destructrice.",image:"",population:"—",races:"Élémentaires de feu",environment:"Volcanique, Lave",danger:5,characters:"—",places:"—"},
+
+// ─── AGING LANDS ──────────────────────────────────────────────────────────────
+"Border_AgingLands":{name:"Aging Lands",nation:"Région principale",color:"#5a7a9a",desc:"Terres anciennes portant le poids des ères passées. Chaque pierre y raconte une histoire, chaque ruine cache un secret.",image:"",population:"~80 000",races:"Insectes divers, Arachnides, Vers",environment:"Cavernes, Forêts, Ruines, Océan intérieur",danger:3,characters:"—",places:"Hallownest, Pharloom, Sol-Sunk, Stophorn"},
+
+// Stophorn
+"Border_Stophorn":{name:"Stophorn",nation:"Aging Lands",color:"#4a7c59",desc:"Zone industrielle sombre et brumeuse, marquée par des structures mécaniques rouillées et des abysses vertigineux. Autrefois prospère, maintenant à l'abandon.",image:"",population:"~5 000",races:"Insectes ouvriers, Vers mécaniques",environment:"Industriel, Cavernes, Abysses",danger:3,characters:"—",places:"Ancient Library, Hanged City, Void Painter's Abyss"},
+"Border_FlamingBursts":{name:"Flaming Bursts",nation:"Stophorn — Aging Lands",color:"#4a7c59",desc:"Zone de geysers enflammés au cœur de Stophorn, résultat de l'activité volcanique sous-jacente.",image:"",population:"—",races:"Créatures de feu",environment:"Volcanique",danger:4,characters:"—",places:"—"},
+"Border_Watchtower":{name:"Watchtower",nation:"Stophorn — Aging Lands",color:"#4a7c59",desc:"Tour de guet dominant Stophorn, abandonnée depuis des décennies. Sa silhouette reste un repère pour les voyageurs.",image:"",population:"—",races:"—",environment:"Tour, Ruines",danger:2,characters:"—",places:"—"},
+"Border_Library":{name:"Library",nation:"Stophorn — Aging Lands",color:"#4a7c59",desc:"Bibliothèque secondaire de Stophorn, encore partiellement accessible malgré les ravages du temps.",image:"",population:"—",races:"—",environment:"Bibliothèque",danger:2,characters:"—",places:"—"},
+"Border_Glacier":{name:"Glacier",nation:"Stophorn — Aging Lands",color:"#5a8c9a",desc:"Plateau gelé au sommet de Stophorn. Les vents glaciaux y sculptent des formations de glace spectaculaires.",image:"",population:"—",races:"Créatures de glace",environment:"Glacier, Cavernes de glace",danger:3,characters:"—",places:"—"},
+"Border_AncientLibrary":{name:"Ancient Library",nation:"Stophorn — Aging Lands",color:"#4a7c59",desc:"Bibliothèque colossale enfouie dans les profondeurs de Stophorn. Des millions de volumes poussiéreux contiennent la sagesse perdue des générations.",image:"",population:"—",races:"Archivistes",environment:"Bibliothèque souterraine",danger:2,characters:"—",places:"—"},
+"Border_CoppeDig":{name:"Coppe Dig",nation:"Stophorn — Aging Lands",color:"#4a7c59",desc:"Ancienne mine de cuivre aujourd'hui inondée de métaux corrosifs.",image:"",population:"~50 (mineurs)",races:"Insectes mineurs",environment:"Mines",danger:3,characters:"—",places:"—"},
+"Border_HangedCity":{name:"Hanged City",nation:"Stophorn — Aging Lands",color:"#6a5c7a",desc:"Cité suspendue entre des falaises abruptes, reliée par des ponts de corde et de métal rouillé. Ses habitants vivent au rythme des balancements constants de leurs demeures.",image:"",population:"~800",races:"Insectes acrobates",environment:"Cité suspendue, Falaises",danger:3,characters:"—",places:"—"},
+"Border_AzurTemple":{name:"Azur Temple",nation:"Stophorn — Aging Lands",color:"#3a6a8a",desc:"Temple aux murs d'un bleu azur, dédié à une divinité des eaux souterraines. Ses fontaines coulent encore, alimentées par des sources mystérieuses.",image:"",population:"~100 (moines)",races:"Insectes dévoués",environment:"Temple, Fontaines",danger:2,characters:"Oracle des Eaux",places:"—"},
+"Border_GreatWell":{name:"Great Well",nation:"Stophorn — Aging Lands",color:"#4a7c59",desc:"Champ s'étendant autour d'un puits colossal dont le fond est invisible. L'air y est chargé d'une brume humide et d'odeurs souterraines.",image:"",population:"~200",races:"Insectes agriculteurs",environment:"Champs, Puits sans fond",danger:3,characters:"—",places:"—"},
+"Border_Gravefield":{name:"Gravefield",nation:"Stophorn — Aging Lands",color:"#5a4a5a",desc:"Vaste cimetière à ciel ouvert où les pierres tombales se dressent en forêt dense. Une atmosphère pesante règne sur ces terres.",image:"",population:"—",races:"Esprits, Revenants",environment:"Cimetière",danger:3,characters:"—",places:"—"},
+"Border_TreatmentPlant":{name:"Treatment Plant",nation:"Stophorn — Aging Lands",color:"#6a5a3a",desc:"Installation médicale abandonnée dont les équipements rouillés témoignent d'expériences douteuses passées.",image:"",population:"—",races:"—",environment:"Usine abandonnée",danger:3,characters:"—",places:"—"},
+"Border_RustedPipelines":{name:"Rusted Pipelines",nation:"Stophorn — Aging Lands",color:"#7a5a3a",desc:"Labyrinthe de tuyaux géants rouillés sillonnant les entrailles de Stophorn. Des gaz s'en échappent par intermittence.",image:"",population:"—",races:"—",environment:"Industriel, Tuyaux",danger:3,characters:"—",places:"—"},
+"Border_Plentyard":{name:"Plentyard",nation:"Stophorn — Aging Lands",color:"#4a6a4a",desc:"Cour d'abondance autrefois remplie de marchandises, aujourd'hui pillée et abandonnée.",image:"",population:"~50",races:"Charognards",environment:"Cour, Entrepôts",danger:2,characters:"—",places:"—"},
+"Border_TheDam":{name:"The Dam",nation:"Stophorn — Aging Lands",color:"#5a4a3a",desc:"Barrage colossal retenant les eaux souterraines de Stophorn. Des fissures inquiétantes s'y multiplient.",image:"",population:"~30 (gardes)",races:"Ingénieurs insectes",environment:"Barrage, Eaux souterraines",danger:4,characters:"—",places:"—"},
+"Border_Dump":{name:"Dump",nation:"Stophorn — Aging Lands",color:"#5a4a2a",desc:"Dépotoir de Stophorn, amoncellement colossal de déchets et de rebuts mécaniques. Des charognards y fouillent en permanence.",image:"",population:"~100 (charognards)",races:"Charognards, Parasites",environment:"Décharge",danger:2,characters:"—",places:"—"},
+"Border_Infestation":{name:"Infestation",nation:"Stophorn — Aging Lands",color:"#4a7c59",desc:"Zone infestée d'une corruption organique qui ronge les structures métalliques de Stophorn.",image:"",population:"—",races:"Créatures corrompues",environment:"Zone corrompue",danger:4,characters:"—",places:"—"},
+"Border_VoidPaintersAbyss":{name:"Void Painter's Abyss",nation:"Stophorn — Aging Lands",color:"#1a1a2a",desc:"Abysse infini où un artiste mystérieux peint des tableaux visibles uniquement dans l'obscurité totale.",image:"",population:"1 (le Peintre)",races:"Entité du Vide",environment:"Abysse, Obscurité",danger:5,characters:"Le Peintre du Vide",places:"—"},
+
+// Hallownest
+"Border_Hallownest":{name:"Hallownest",nation:"Aging Lands",color:"#6b4c8a",desc:"Royaume oublié des insectes, désormais envahi par une infection mystérieuse. Ses vastes corridors et chambres silencieuses témoignent d'une grandeur passée.",image:"",population:"~10 000 (avant infection)",races:"Insectes variés, Vers",environment:"Cavernes, Cités souterraines, Forêts",danger:4,characters:"Le Roi Pâle, La Reine des Mandibules, Le Chevalier",places:"City of Tears, Deepnest, Crystal Peak, Ancient Basin"},
+"Border_HowlingCliffs":{name:"Howling Cliffs",nation:"Hallownest — Aging Lands",color:"#6a5a7a",desc:"Falaises vertigineuses fouettées par des vents hurlants. Une stèle mystérieuse y trône, témoin du Grand Plan du Roi Pâle.",image:"",population:"—",races:"—",environment:"Falaises, Vent",danger:2,characters:"—",places:"Stèle du Grand Plan"},
+"Border_Dirtmouth":{name:"Dirtmouth",nation:"Hallownest — Aging Lands",color:"#7a6a5a",desc:"Village fantôme à l'entrée de Hallownest. Quelques irréductibles résistent encore à l'abandon généralisé.",image:"",population:"~20",races:"Insectes survivants",environment:"Village abandonné",danger:2,characters:"Cornifer, Iselda, Sly",places:"—"},
+"Border_Greenpath":{name:"Greenpath",nation:"Hallownest — Aging Lands",color:"#3a6a3a",desc:"Chemin verdoyant où la végétation prospère malgré tout. La Reine des Mandibules y réside, gardant jalousement son sanctuaire.",image:"",population:"~200",races:"Insectes végétaux, Limaces",environment:"Forêt, Mousses",danger:2,characters:"Unn (endormie)",places:"Lac de Unn"},
+"Border_FogCanyon":{name:"Fog Canyon",nation:"Hallownest — Aging Lands",color:"#5a6a7a",desc:"Canyon perpétuellement enveloppé d'un brouillard épais et acide. Des méduses translucides y flottent en silence.",image:"",population:"~100",races:"Méduses, Insectes des brumes",environment:"Canyon, Brouillard acide",danger:3,characters:"—",places:"Tour des Élus"},
+"Border_QueensGardens":{name:"Queen's Gardens",nation:"Hallownest — Aging Lands",color:"#4a7a4a",desc:"Jardins personnels de la Reine des Mandibules, protégés par ses soldats les plus féroces. Une beauté sauvage et dangereuse y règne.",image:"",population:"~150 (soldats)",races:"Mantidés, Soldats de la Reine",environment:"Jardins",danger:4,characters:"La Reine des Mandibules",places:"Jardin Royal"},
+"Border_FungalWastes":{name:"Fungal Wastes",nation:"Hallownest — Aging Lands",color:"#5a7a3a",desc:"Écosystème de champignons géants colonisant d'anciens tunnels. Les spores en suspension créent des hallucinations chez la plupart des visiteurs.",image:"",population:"~500 (Clan des Champignons)",races:"Champignons sapients, Insectes mutés",environment:"Cavernes fongiques",danger:3,characters:"—",places:"Village des Champignons"},
+"Border_Deepnest":{name:"Deepnest",nation:"Hallownest — Aging Lands",color:"#3a2a3a",desc:"Profondeurs obscures de Hallownest, domaine des araignées géantes et autres créatures des abysses. Un labyrinthe sans lumière où chaque pas peut être le dernier.",image:"",population:"~2 000 (Troglodytes)",races:"Araignées géantes, Troglodytes",environment:"Obscurité totale, Tunnels",danger:5,characters:"Herrah la Bête",places:"Berceau de la Bête"},
+"Border_AncientBasin":{name:"Ancient Basin",nation:"Hallownest — Aging Lands",color:"#4a3a5a",desc:"Profondeurs primordiales de Hallownest. Lieu de naissance du Roi Pâle, les murs y sont couverts d'inscriptions dans une langue oubliée.",image:"",population:"—",races:"Ombres, Gardiens anciens",environment:"Bassin souterrain",danger:5,characters:"—",places:"Palace des Vers, Trône du Roi Pâle"},
+"Border_HallownestsAbyss":{name:"Hallownest's Abyss",nation:"Hallownest — Aging Lands",color:"#1a1a2a",desc:"L'abysse ultime de Hallownest. C'est ici que les êtres d'ombre sont nés, et que le Roi Pâle scella la Chose Blanche.",image:"",population:"—",races:"Êtres d'ombre",environment:"Abysse, Obscurité absolue",danger:5,characters:"—",places:"Naissance des Ombres"},
+"Border_TheHive":{name:"The Hive",nation:"Hallownest — Aging Lands",color:"#8a7a2a",desc:"Ruche d'une colonie d'abeilles guerrières. L'air y vibre du bourdonnement constant de milliers d'insectes.",image:"",population:"~5 000 (abeilles)",races:"Abeilles guerrières",environment:"Ruche de cire",danger:3,characters:"Hive Knight",places:"—"},
+"Border_RoyalWaterways":{name:"Royal Waterways",nation:"Hallownest — Aging Lands",color:"#2a4a7a",desc:"Système de canaux royaux maintenant infestés de créatures aquatiques et de déchets accumulés.",image:"",population:"—",races:"Créatures aquatiques, Dung Defenders",environment:"Canaux, Égouts",danger:3,characters:"Dung Defender",places:"—"},
+"Border_KingdomsEdge":{name:"Kingdom's Edge",nation:"Hallownest — Aging Lands",color:"#7a5a3a",desc:"Les marges orientales de Hallownest, où les ruines s'effondrent dans des précipices sans fond.",image:"",population:"~50",races:"Chauve-souris, Insectes des falaises",environment:"Falaises, Ruines",danger:4,characters:"—",places:"Abysse du Royaume"},
+"Border_CityOfTears":{name:"City of Tears",nation:"Hallownest — Aging Lands",color:"#4a4a8a",desc:"Capitale de Hallownest sous une pluie perpétuelle. L'eau cascade des structures élevées, créant une mélodie mélancolique dans les rues désertes.",image:"",population:"~500 (avant infection)",races:"Insectes de la cour, Gardiens royaux",environment:"Cité, Pluie permanente",danger:4,characters:"—",places:"Palais Royal, Salle du Trône"},
+"Border_RestingGrounds":{name:"Resting Grounds",nation:"Hallownest — Aging Lands",color:"#7a5a9a",desc:"Lieu de repos éternel pour les âmes de Hallownest. Atmosphère étrangement apaisante malgré l'omniprésence de la mort.",image:"",population:"—",races:"Âmes, La Rêveuse",environment:"Cimetière, Espace des rêves",danger:2,characters:"Seer (La Rêveuse)",places:"—"},
+"Border_ForgottenCrossroads":{name:"Forgotten Crossroads",nation:"Hallownest — Aging Lands",color:"#7a5a8a",desc:"Le carrefour oublié de Hallownest, réseau de tunnels envahis par l'infection dorée.",image:"",population:"—",races:"Insectes infectés",environment:"Tunnels infestés",danger:3,characters:"Gruz Mother",places:"—"},
+"Border_CrystalPeak":{name:"Crystal Peak",nation:"Hallownest — Aging Lands",color:"#8a6a9a",desc:"Pic entièrement recouvert de cristaux lumineux. La lumière y est intense, aveuglante, et crée d'étranges illusions.",image:"",population:"~100 (mineurs)",races:"Mineurs de cristal",environment:"Cavernes de cristal",danger:3,characters:"Crystal Guardian",places:"Mine de Luminium"},
+
+// Pharloom
+"Border_Pharloom":{name:"Pharloom",nation:"Aging Lands",color:"#8a3a5a",desc:"Royaume mystérieux tissé de soie et de secrets. Destination principale de Hornet, un lieu où magie et artisanat se mêlent indissociablement.",image:"",population:"~15 000",races:"Insectes tisserands, Araignées artisanes",environment:"Ateliers de soie, Abysses, Forêts de soie",danger:3,characters:"Hornet",places:"Song Citadel, Mount Fay, Weavenest Alta"},
+"Border_MountFay":{name:"Mount Fay",nation:"Pharloom — Aging Lands",color:"#8a3a5a",desc:"Montagne sacrée dominant Pharloom, sommet inviolable des dieux tisserands.",image:"",population:"—",races:"Gardiens sacrés",environment:"Montagne, Sommet",danger:4,characters:"—",places:"—"},
+"Border_TheBloc":{name:"The Bloc",nation:"Pharloom — Aging Lands",color:"#8a3a5a",desc:"Quartier fortifié contrôlant l'accès à Pharloom depuis le nord.",image:"",population:"~500 (soldats)",races:"Soldats insectes",environment:"Forteresse",danger:3,characters:"—",places:"—"},
+"Border_SandsOfKarak":{name:"Sands of Karak",nation:"Pharloom — Aging Lands",color:"#8a3a5a",desc:"Étendues de soie solidifiée aux propriétés étranges, formant des dunes qui se déplacent comme du vrai sable.",image:"",population:"—",races:"—",environment:"Dunes de soie",danger:3,characters:"—",places:"—"},
+"Border_BlastedSteps":{name:"Blasted Steps",nation:"Pharloom — Aging Lands",color:"#8a3a5a",desc:"Escaliers brisés menant aux niveaux supérieurs de Pharloom, ravagés par une explosion ancienne.",image:"",population:"—",races:"—",environment:"Ruines",danger:3,characters:"—",places:"—"},
+"Border_Shellwood":{name:"Shellwood",nation:"Pharloom — Aging Lands",color:"#8a3a5a",desc:"Forêt de structures en carapace fossilisée, vestige d'un écosystème disparu.",image:"",population:"~200",races:"Insectes des bois",environment:"Forêt fossilisée",danger:2,characters:"—",places:"—"},
+"Border_Wormways":{name:"Wormways",nation:"Pharloom — Aging Lands",color:"#8a3a5a",desc:"Tunnels creusés par des vers colossaux, utilisés comme routes par les habitants de Pharloom.",image:"",population:"~100 (passeurs)",races:"Vers colossaux, Passeurs",environment:"Tunnels organiques",danger:3,characters:"—",places:"—"},
+"Border_BoneBottom":{name:"Bone Bottom",nation:"Pharloom — Aging Lands",color:"#8a3a5a",desc:"Fond d'un gouffre tapissé d'ossements de créatures colossales dont l'identité reste mystérieuse.",image:"",population:"—",races:"Nécrophages",environment:"Gouffre, Ossements",danger:4,characters:"—",places:"—"},
+"Border_TheMarrow":{name:"The Marrow",nation:"Pharloom — Aging Lands",color:"#8a3a5a",desc:"Moelle osseuse géante d'une créature morte depuis des millénaires, maintenant habitée.",image:"",population:"~300",races:"Insectes parasites",environment:"Organique, Biologique",danger:4,characters:"—",places:"—"},
+"Border_WeavenestAlta":{name:"Weavenest Alta",nation:"Pharloom — Aging Lands",color:"#8a3a5a",desc:"Nid de tissage aérien suspendu entre les parois d'un gouffre. Chef-d'œuvre architectural en soie.",image:"",population:"~1 000 (tisserands)",races:"Maîtres tisserands",environment:"Nid aérien, Soie",danger:2,characters:"Alta la Grande Tisseuse",places:"Atelier d'Alta"},
+"Border_Bellhart":{name:"Bellhart",nation:"Pharloom — Aging Lands",color:"#8a3a5a",desc:"Village de cloches dont chaque structure résonne d'une fréquence différente, créant une musique permanente.",image:"",population:"~400",races:"Insectes musiciens",environment:"Village sonore",danger:1,characters:"—",places:"—"},
+"Border_DeepDocks":{name:"Deep Docks",nation:"Pharloom — Aging Lands",color:"#8a3a5a",desc:"Quais souterrains où accostent les barques de soie transportant marchandises et voyageurs.",image:"",population:"~300 (dockers)",races:"Insectes marins",environment:"Quais, Eaux souterraines",danger:2,characters:"—",places:"—"},
+"Border_HuntersMarch":{name:"Hunter's March",nation:"Pharloom — Aging Lands",color:"#8a3a5a",desc:"Territoire de chasse rituel réservé aux chasseurs les plus expérimentés de Pharloom.",image:"",population:"—",races:"Chasseurs d'élite, Proies",environment:"Forêt de chasse",danger:4,characters:"—",places:"—"},
+"Border_PharloomsAbyss":{name:"Pharloom's Abyss",nation:"Pharloom — Aging Lands",color:"#1a1a2a",desc:"L'abysse de Pharloom, un gouffre infini d'où remontent des fils de soie noire aux propriétés inconnues.",image:"",population:"—",races:"Entités abyssales",environment:"Abysse",danger:5,characters:"—",places:"—"},
+"Border_FarFields":{name:"Far Fields",nation:"Pharloom — Aging Lands",color:"#8a3a5a",desc:"Champs éloignés aux confins de Pharloom, où la soie pousse à l'état naturel.",image:"",population:"~200 (cultivateurs)",races:"Insectes agriculteurs",environment:"Champs de soie",danger:2,characters:"—",places:"—"},
+"Border_Greymoor":{name:"Greymoor",nation:"Pharloom — Aging Lands",color:"#8a3a5a",desc:"Lande grise perpétuellement couverte d'un brouillard bas et dense.",image:"",population:"~100",races:"Insectes des brumes",environment:"Lande brumeuse",danger:3,characters:"—",places:"—"},
+"Border_WhispThicket":{name:"Whisp Thicket",nation:"Pharloom — Aging Lands",color:"#8a3a5a",desc:"Taillis de soie chuchotante où les fils captent et répètent les sons ambiants indéfiniment.",image:"",population:"—",races:"Esprits du son",environment:"Forêt de soie",danger:2,characters:"—",places:"—"},
+"Border_SinnersRoad":{name:"Sinners Road",nation:"Pharloom — Aging Lands",color:"#8a3a5a",desc:"Route du châtiment où les criminels condamnés doivent marcher avant leur jugement final.",image:"",population:"Variable",races:"Condamnés, Gardes",environment:"Route, Prison",danger:3,characters:"—",places:"—"},
+"Border_Verdania":{name:"Verdania",nation:"Pharloom — Aging Lands",color:"#8a3a5a",desc:"Enclave verdoyante au cœur de Pharloom, jardin botanique naturel préservé.",image:"",population:"~150 (jardiniers)",races:"Insectes botanistes",environment:"Jardin naturel",danger:1,characters:"—",places:"—"},
+"Border_Bilewater":{name:"Bilewater",nation:"Pharloom — Aging Lands",color:"#8a3a5a",desc:"Eaux corrompues par les déchets industriels de la cité de soie, dangereuses au simple toucher.",image:"",population:"—",races:"Créatures mutées",environment:"Eaux toxiques",danger:4,characters:"—",places:"—"},
+"Border_Underworks":{name:"Underworks",nation:"Pharloom — Aging Lands",color:"#8a3a5a",desc:"Infrastructures souterraines de Pharloom, réseau labyrinthique de tuyaux et de câbles de soie.",image:"",population:"~500 (techniciens)",races:"Ingénieurs insectes",environment:"Souterrain, Industriel",danger:3,characters:"—",places:"—"},
+"Border_SongCitadel":{name:"Song Citadel",nation:"Pharloom — Aging Lands",color:"#8a3a5a",desc:"Citadelle gouvernementale de Pharloom, forteresse musicale dont les murs résonnent de la mélodie royale.",image:"",population:"~2 000 (cour)",races:"Élite de Pharloom",environment:"Citadelle, Palais",danger:3,characters:"Reine de Pharloom",places:"Salle du Chant Royal"},
+"Border_PutrifiedDucts":{name:"Putrified Ducts",nation:"Pharloom — Aging Lands",color:"#8a3a5a",desc:"Conduits putréfiés où la soie en décomposition crée une atmosphère toxique.",image:"",population:"—",races:"Créatures des égouts",environment:"Égouts corrosifs",danger:4,characters:"—",places:"—"},
+"Border_TheCradle":{name:"The Cradle",nation:"Pharloom — Aging Lands",color:"#8a3a5a",desc:"Berceau originel de Pharloom, le lieu sacré où la première soie fut tissée.",image:"",population:"~50 (gardiens)",races:"Gardiens sacrés",environment:"Sanctuaire",danger:2,characters:"—",places:"Premier Métier à Tisser"},
+"Border_ForgottenVillage":{name:"Forgotten Village",nation:"Pharloom — Aging Lands",color:"#8a3a5a",desc:"Village oublié de Pharloom, effacé des cartes officielles pour des raisons inconnues.",image:"",population:"~80 (isolés)",races:"Insectes reclus",environment:"Village isolé",danger:2,characters:"—",places:"—"},
+
+// Shaman's Territory
+"Border_ShamansTerritory":{name:"Shaman's Territory",nation:"Aging Lands",color:"#7a5a2a",desc:"Terres sacrées contrôlées par des chamanes puissants qui communiquent avec les esprits des profondeurs.",image:"",population:"~2 000",races:"Insectes chamanes, Esprits",environment:"Forêts spirituelles, Chutes d'eau",danger:3,characters:"Le Grand Chaman",places:"Spirit Source, Wild Falls"},
+"Border_SpiritSource":{name:"Spirit Source",nation:"Shaman's Territory — Aging Lands",color:"#7a5a2a",desc:"Source des esprits, point de confluence entre le monde des vivants et celui des morts.",image:"",population:"—",races:"Esprits, Chamanes",environment:"Source sacrée",danger:3,characters:"Gardien de la Source",places:"—"},
+"Border_Covetown":{name:"Covetown",nation:"Shaman's Territory — Aging Lands",color:"#7a5a2a",desc:"Village clandestin abritant des chamanes renégats pratiquant des rituels interdits.",image:"",population:"~150",races:"Chamanes renégats",environment:"Village caché",danger:3,characters:"—",places:"—"},
+"Border_WildFalls":{name:"Wild Falls",nation:"Shaman's Territory — Aging Lands",color:"#7a5a2a",desc:"Chutes d'eau sauvages dont le grondement couvre les incantations des chamanes.",image:"",population:"—",races:"—",environment:"Chutes d'eau, Forêt",danger:2,characters:"—",places:"—"},
+"Border_DryCorals":{name:"Dry Corals",nation:"Shaman's Territory — Aging Lands",color:"#6a5a4a",desc:"Récifs coralliens aujourd'hui à l'air libre, témoins d'une mer disparue il y a des millénaires.",image:"",population:"—",races:"—",environment:"Coraux fossilisés",danger:2,characters:"—",places:"—"},
+"Border_SpiralSprout":{name:"Spiral Sprout",nation:"Shaman's Territory — Aging Lands",color:"#7a5a2a",desc:"Plante géante en spirale dont les spores sont utilisées dans tous les rituels chamaniques.",image:"",population:"—",races:"—",environment:"Végétation géante",danger:2,characters:"—",places:"—"},
+
+// Lands of Storms
+"Border_LandsOfStorms":{name:"Lands of Storms",nation:"Aging Lands",color:"#8a6b2a",desc:"Terres balayées par des tempêtes perpétuelles, où l'électricité crépite dans l'air et où les ruines d'anciens temples résistent au vent déchaîné.",image:"",population:"~8 000",races:"Insectes des tempêtes, Dieux du tonnerre",environment:"Plaines balayées par le vent, Temples, Marécages électriques",danger:4,characters:"—",places:"God Domain, Contemplation, Rainwaters Tunnels"},
+"Border_AncientCimetery":{name:"Ancient Cemetery",nation:"Lands of Storms — Aging Lands",color:"#8a6b2a",desc:"Cimetière ancestral aux pierres tombales ornées de symboles ésotériques.",image:"",population:"—",races:"Esprits anciens",environment:"Cimetière",danger:3,characters:"—",places:"—"},
+"Border_SeasideCliffs":{name:"Seaside Cliffs",nation:"Lands of Storms — Aging Lands",color:"#4a6a8a",desc:"Falaises côtières fouettées en permanence par les embruns et les éclairs.",image:"",population:"~100 (guerriers)",races:"Guerriers des tempêtes",environment:"Falaises, Mer agitée",danger:4,characters:"—",places:"—"},
+"Border_Fogpath":{name:"Fogpath",nation:"Lands of Storms — Aging Lands",color:"#8a6b2a",desc:"Chemin perpétuellement dans le brouillard, où les voyageurs se perdent régulièrement.",image:"",population:"—",races:"—",environment:"Brouillard dense",danger:3,characters:"—",places:"—"},
+"Border_SteamMachine":{name:"Steam Machine",nation:"Lands of Storms — Aging Lands",color:"#8a6b2a",desc:"Machine à vapeur colossale capturant l'énergie des tempêtes pour alimenter la région.",image:"",population:"~200 (techniciens)",races:"Ingénieurs",environment:"Industriel, Vapeur",danger:3,characters:"—",places:"—"},
+"Border_RewardsDistrict":{name:"Rewards District",nation:"Lands of Storms — Aging Lands",color:"#8a6b2a",desc:"District des récompenses, où les guerriers victorieux reçoivent les honneurs des dieux.",image:"",population:"~500",races:"Guerriers honorés",environment:"District urbain",danger:1,characters:"—",places:"—"},
+"Border_GodPantheon":{name:"God Pantheon",nation:"Lands of Storms — Aging Lands",color:"#9a7a2a",desc:"Panthéon des dieux des tempêtes, accessible uniquement lors de la Grande Tempête annuelle.",image:"",population:"—",races:"Dieux des tempêtes",environment:"Temple divin",danger:5,characters:"Dieux des Tempêtes",places:"—"},
+"Border_Storage":{name:"Storage",nation:"Lands of Storms — Aging Lands",color:"#6a5a4a",desc:"Entrepôts souterrains contenant des provisions pour des années entières.",image:"",population:"~50 (gardiens)",races:"Gardes",environment:"Entrepôts",danger:1,characters:"—",places:"—"},
+"Border_DevoutWorkshop":{name:"Devout Workshop",nation:"Lands of Storms — Aging Lands",color:"#8a4a5a",desc:"Atelier des dévots où sont fabriqués les équipements résistants aux tempêtes.",image:"",population:"~100 (artisans)",races:"Artisans dévoués",environment:"Atelier",danger:2,characters:"—",places:"—"},
+"Border_MossDomaine":{name:"Moss Domain",nation:"Lands of Storms — Aging Lands",color:"#4a7a4a",desc:"Domaine couvert de mousse épaisse, isolant naturellement des tempêtes extérieures.",image:"",population:"~300",races:"Insectes des mousses",environment:"Forêt de mousse",danger:2,characters:"—",places:"—"},
+"Border_ForbiddenSwamps":{name:"Forbidden Swamps",nation:"Lands of Storms — Aging Lands",color:"#3a5a3a",desc:"Marécages interdits où les éclairs s'accumulent dans les eaux stagnantes.",image:"",population:"—",races:"Créatures des marécages",environment:"Marécages électriques",danger:5,characters:"—",places:"—"},
+"Border_RainwatersTunnels":{name:"Rainwaters Tunnels",nation:"Lands of Storms — Aging Lands",color:"#6a4a5a",desc:"Réseau de tunnels récoltant les eaux de pluie pour alimenter la région.",image:"",population:"~80 (techniciens)",races:"Ingénieurs",environment:"Tunnels hydrauliques",danger:2,characters:"—",places:"—"},
+"Border_Contemplation":{name:"Contemplation",nation:"Lands of Storms — Aging Lands",color:"#6a5a8a",desc:"Temple de méditation où les moines s'immergent dans les tempêtes pour atteindre l'illumination.",image:"",population:"~50 (moines)",races:"Moines des tempêtes",environment:"Temple",danger:2,characters:"—",places:"—"},
+"Border_ThunderCollector":{name:"Thunder Collector",nation:"Lands of Storms — Aging Lands",color:"#8a6b2a",desc:"Structure colossale captant la foudre et stockant son énergie dans des cristaux.",image:"",population:"~30 (opérateurs)",races:"Techniciens spécialisés",environment:"Industriel",danger:4,characters:"—",places:"—"},
+"Border_TheStorm":{name:"The Storm",nation:"Lands of Storms — Aging Lands",color:"#5a6a8a",desc:"L'œil d'une tempête éternelle, zone de calme absolu entourée de chaos électrique.",image:"",population:"—",races:"—",environment:"Tempête permanente",danger:5,characters:"—",places:"—"},
+"Border_GodDomain":{name:"God Domain",nation:"Lands of Storms — Aging Lands",color:"#9a7a2a",desc:"Domaine réservé aux divinités des tempêtes. Les mortels ne peuvent y pénétrer sans invitation.",image:"",population:"—",races:"Dieux",environment:"Domaine divin",danger:5,characters:"Dieux des Tempêtes",places:"—"},
+
+// Sol-Sunk
+"Border_Sol-Sunk":{name:"Sol-Sunk",nation:"Aging Lands",color:"#2a5f8f",desc:"Vaste étendue marine baignée d'une lumière mystérieuse. Ses eaux abritent des créatures bioluminescentes et les ruines d'une civilisation submergée.",image:"",population:"~5 000",races:"Insectes aquatiques, Créatures marines",environment:"Océan intérieur, Cavernes sous-marines, Ruines englouties",danger:3,characters:"La Bête des Pleurs",places:"Mourning Sea, Beast Lair, Requiem City"},
+"Border_Saltlake":{name:"Saltlake",nation:"Sol-Sunk — Aging Lands",color:"#2a5f8f",desc:"Lac de sel cristallisé aux reflets irisés. Ses eaux ont des propriétés conservatrices remarquables.",image:"",population:"~100",races:"Insectes des salines",environment:"Lac salé",danger:2,characters:"—",places:"—"},
+"Border_Pilgrimage":{name:"Pilgrimage",nation:"Sol-Sunk — Aging Lands",color:"#3a5a7a",desc:"Chemin sacré suivi par des pèlerins depuis des générations. Les pierres y sont polies par d'innombrables pas.",image:"",population:"Variable (pèlerins)",races:"Pèlerins",environment:"Route sacrée",danger:2,characters:"—",places:"—"},
+"Border_FirstSettlement":{name:"First Settlement",nation:"Sol-Sunk — Aging Lands",color:"#4a6a7a",desc:"Vestiges de la première colonie établie dans la région de Sol-Sunk, témoins d'une époque où la mer n'existait pas.",image:"",population:"~200",races:"Insectes colons",environment:"Village primitif",danger:2,characters:"—",places:"—"},
+"Border_Theatre":{name:"Theatre",nation:"Sol-Sunk — Aging Lands",color:"#2a5f8f",desc:"Théâtre englouti dont les représentations continuent, jouées par des acteurs fantômes pour un public invisible.",image:"",population:"—",races:"Fantômes acteurs",environment:"Théâtre sous-marin",danger:3,characters:"—",places:"—"},
+"Border_AncientSea":{name:"Ancient Sea",nation:"Sol-Sunk — Aging Lands",color:"#1a3a6a",desc:"L'ancienne mer dont Sol-Sunk est le vestige, maintenant réduite à un lac intérieur.",image:"",population:"—",races:"Créatures marines anciennes",environment:"Mer intérieure",danger:4,characters:"—",places:"—"},
+"Border_RequiemCity":{name:"Requiem City",nation:"Sol-Sunk — Aging Lands",color:"#3a5a8a",desc:"Cité engloutie dont les flèches émergent encore à la surface. Ancienne capitale de Sol-Sunk.",image:"",population:"—",races:"Fantômes, Automates",environment:"Cité sous-marine",danger:3,characters:"—",places:"—"},
+"Border_Flowerbed":{name:"Flowerbed",nation:"Sol-Sunk — Aging Lands",color:"#2a5f8f",desc:"Lit de fleurs aquatiques bioluminescentes, paradis visuel aux propriétés médicinales.",image:"",population:"~50 (botanistes)",races:"Botanistes aquatiques",environment:"Jardin sous-marin",danger:1,characters:"—",places:"—"},
+"Border_WeepingCoast":{name:"Weeping Coast",nation:"Sol-Sunk — Aging Lands",color:"#2a4a7a",desc:"Côte balayée par des pluies continues et des vagues écumantes. Les formations rocheuses gémissent sous le vent.",image:"",population:"—",races:"—",environment:"Côte, Falaises",danger:3,characters:"—",places:"—"},
+"Border_BlessedWebCatacombs":{name:"Blessed Web Catacombs",nation:"Sol-Sunk — Aging Lands",color:"#5a5a7a",desc:"Catacombes sacrées recouvertes de toiles bénites dont les fils brillent dans l'obscurité.",image:"",population:"—",races:"Gardiens des catacombes",environment:"Catacombes",danger:3,characters:"—",places:"—"},
+"Border_Wetgrasses":{name:"Wetgrasses",nation:"Sol-Sunk — Aging Lands",color:"#2a5f8f",desc:"Prairies aquatiques où les herbes atteignent plusieurs mètres de hauteur.",image:"",population:"~200",races:"Insectes des marais",environment:"Prairies humides",danger:2,characters:"—",places:"—"},
+"Border_Redgrapes":{name:"Redgrapes",nation:"Sol-Sunk — Aging Lands",color:"#2a5f8f",desc:"Vignes sous-marines portant des fruits rouges aux propriétés hallucinogènes.",image:"",population:"~50 (cultivateurs)",races:"Insectes viticulteurs",environment:"Vignes sous-marines",danger:2,characters:"—",places:"—"},
+"Border_RecludedTribe":{name:"Reclused Tribe",nation:"Sol-Sunk — Aging Lands",color:"#2a5f8f",desc:"Tribu vivant en autarcie dans les profondeurs de Sol-Sunk, refusant tout contact extérieur.",image:"",population:"~300",races:"Insectes reclus",environment:"Communauté isolée",danger:3,characters:"Chef de la Tribu Recluse",places:"—"},
+"Border_FungalPit":{name:"Fungal Pit",nation:"Sol-Sunk — Aging Lands",color:"#5a7a3a",desc:"Fosse de champignons géants dont les spores créent des illusions aquatiques troublantes.",image:"",population:"—",races:"Champignons sapients",environment:"Fosse fongique",danger:3,characters:"—",places:"—"},
+"Border_LifebloodBud":{name:"Lifeblood Bud",nation:"Sol-Sunk — Aging Lands",color:"#2a5a4a",desc:"Excroissance organique massive pulsant d'une énergie bleue, source de pouvoir dont l'origine défie la compréhension.",image:"",population:"—",races:"—",environment:"Formation organique",danger:3,characters:"—",places:"—"},
+"Border_AbyssalWaters":{name:"Abyssal Waters",nation:"Sol-Sunk — Aging Lands",color:"#2a4a6a",desc:"Eaux abyssales insondables où aucune lumière ne pénètre. Des créatures invisibles y patrouillent.",image:"",population:"—",races:"Créatures abyssales",environment:"Abysses aquatiques",danger:5,characters:"—",places:"—"},
+"Border_BeastLair":{name:"Beast's Lair",nation:"Sol-Sunk — Aging Lands",color:"#1a2a5a",desc:"Antre de la Bête des Pleurs. Les murs y sont couverts de griffures laissées par d'innombrables tentatives d'évasion.",image:"",population:"1 (la Bête)",races:"Bête des Pleurs",environment:"Caverne sous-marine",danger:5,characters:"La Bête des Pleurs",places:"—"},
+"Border_MourningSea":{name:"Mourning Sea",nation:"Sol-Sunk — Aging Lands",color:"#1a3a6a",desc:"Mer du deuil, partie centrale de Sol-Sunk. Ses eaux sombres font gémir ceux qui les traversent.",image:"",population:"—",races:"—",environment:"Mer intérieure profonde",danger:4,characters:"—",places:"—"},
+
+// Voltust
+"Border_Voltust":{name:"Voltust",nation:"Aging Lands",color:"#7a4a2a",desc:"Territoire de feu et de vapeur, où la géologie volcanique crée des paysages à la fois magnifiques et mortels.",image:"",population:"~6 000",races:"Insectes résistants à la chaleur, Salamandres",environment:"Volcanique, Geysers, Lacs de lave",danger:4,characters:"Roi Lucane",places:"Devil's Lair, Boiling Lake, Heaven's Church"},
+"Border_HeavensStaircase":{name:"Heaven's Staircase",nation:"Voltust — Aging Lands",color:"#7a4a2a",desc:"Escalier colossal taillé dans la roche volcanique, menant vers les hauteurs sacrées de Voltust.",image:"",population:"~100 (pèlerins)",races:"Pèlerins",environment:"Escalier volcanique",danger:3,characters:"—",places:"—"},
+"Border_AscensionColumn":{name:"Ascension Column",nation:"Voltust — Aging Lands",color:"#7a4a2a",desc:"Colonne de roche volcanique servant de conduit pour les âmes qui montent vers les cieux.",image:"",population:"—",races:"Âmes en transit",environment:"Colonne sacrée",danger:3,characters:"—",places:"—"},
+"Border_HighFalls":{name:"High Falls",nation:"Voltust — Aging Lands",color:"#7a4a2a",desc:"Chutes d'eau chaude tombant depuis des hauteurs vertigineuses dans des bassins de vapeur.",image:"",population:"~50",races:"—",environment:"Chutes d'eau chaude",danger:3,characters:"—",places:"—"},
+"Border_GracelessVillage":{name:"Graceless Village",nation:"Voltust — Aging Lands",color:"#7a4a2a",desc:"Village sans grâce où vivent ceux qui ont été rejetés par la société de Voltust.",image:"",population:"~500 (exclus)",races:"Exclus",environment:"Village marginal",danger:3,characters:"—",places:"—"},
+"Border_LitCatacombs":{name:"Lit Catacombs",nation:"Voltust — Aging Lands",color:"#7a4a2a",desc:"Catacombes éclairées par des cristaux de lave fossilisée, naturellement chauffées.",image:"",population:"—",races:"Gardiens des morts",environment:"Catacombes chauffées",danger:2,characters:"—",places:"—"},
+"Border_LucanePalace":{name:"Lucane Palace",nation:"Voltust — Aging Lands",color:"#7a4a2a",desc:"Palais de la famille régnante de Voltust, bâti sur un lac de lave stabilisé.",image:"",population:"~500 (cour)",races:"Élite de Voltust, Cerfs-volants",environment:"Palais volcanique",danger:2,characters:"Roi Lucane",places:"—"},
+"Border_HeavensChurch":{name:"Heaven's Church",nation:"Voltust — Aging Lands",color:"#7a4a2a",desc:"Église dédiée aux dieux du feu, où les flammes sacrées brûlent depuis la fondation.",image:"",population:"~200 (clercs)",races:"Clercs du feu",environment:"Église sacrée",danger:2,characters:"Grand Prêtre du Feu",places:"Flammes Éternelles"},
+"Border_BlossomGarden":{name:"Blossom Garden",nation:"Voltust — Aging Lands",color:"#7a4a2a",desc:"Jardin de fleurs de feu qui s'épanouissent dans la chaleur volcanique.",image:"",population:"~50 (jardiniers)",races:"Jardiniers spécialisés",environment:"Jardin volcanique",danger:2,characters:"—",places:"—"},
+"Border_BoilingLake":{name:"Boiling Lake",nation:"Voltust — Aging Lands",color:"#7a4a2a",desc:"Lac en perpétuelle ébullition dont les vapeurs ont des propriétés oraculaires.",image:"",population:"—",races:"—",environment:"Lac bouillant",danger:5,characters:"—",places:"—"},
+"Border_Yellowstones":{name:"Yellowstones",nation:"Voltust — Aging Lands",color:"#7a4a2a",desc:"Formation rocheuse jaune soufre, vestige d'une éruption volcanique millénaire.",image:"",population:"—",races:"—",environment:"Géologique, Soufre",danger:3,characters:"—",places:"—"},
+"Border_DryLands":{name:"Dry Lands",nation:"Voltust — Aging Lands",color:"#7a4a2a",desc:"Terres desséchées par la chaleur volcanique, craquelées et stériles.",image:"",population:"~100 (nomades)",races:"Nomades résistants",environment:"Terres arides",danger:3,characters:"—",places:"—"},
+"Border_Heatpools":{name:"Heatpools",nation:"Voltust — Aging Lands",color:"#7a4a2a",desc:"Piscines d'eau thermale aux propriétés médicinales utilisées comme lieux de guérison.",image:"",population:"~200 (curistes)",races:"Divers",environment:"Sources thermales",danger:2,characters:"—",places:"—"},
+"Border_DevilsLair":{name:"Devil's Lair",nation:"Voltust — Aging Lands",color:"#7a4a2a",desc:"Antre du Diable, créature de lave à la réputation terrifiante qui règne sur les profondeurs de Voltust.",image:"",population:"1 (le Diable)",races:"Entité de lave",environment:"Caverne de lave",danger:5,characters:"Le Diable",places:"—"},
+"Border_OilSwamps":{name:"Oil Swamps",nation:"Voltust — Aging Lands",color:"#7a4a2a",desc:"Marécages d'huile volcanique hautement inflammable. Une étincelle suffit à provoquer un incendie.",image:"",population:"—",races:"Créatures igne-résistantes",environment:"Marécages d'huile",danger:5,characters:"—",places:"—"},
+
+// Aging Lands independents
+"Border_AshenPlaza":{name:"Ashen Plaza",nation:"Aging Lands (indépendant)",color:"#5a5a7a",desc:"Place couverte de cendres d'une catastrophe ancienne. Les braises y rougeoient encore.",image:"",population:"—",races:"—",environment:"Place de cendres",danger:3,characters:"—",places:"—"},
+"Border_SeaOfSorrows":{name:"Sea of Sorrows",nation:"Aging Lands (indépendant)",color:"#3a4a6a",desc:"Mer des chagrins où les eaux sont imprégnées des émotions des noyés.",image:"",population:"—",races:"Âmes noyées",environment:"Mer émotionnelle",danger:4,characters:"—",places:"—"},
+"Border_UnexplorableAbyss":{name:"Unexplorable Abyss",nation:"Aging Lands (indépendant)",color:"#1a1a1a",desc:"Abysse impossible à explorer. Tout ce qui y descend ne remonte jamais.",image:"",population:"—",races:"Inconnues",environment:"Abysse infini",danger:5,characters:"—",places:"—"},
+"Border_MagmaEvacuations":{name:"Magma Evacuations",nation:"Aging Lands (indépendant)",color:"#8a3a1a",desc:"Canaux d'évacuation du magma servant de soupapes pour les tensions volcaniques de la région.",image:"",population:"—",races:"Élémentaires de feu",environment:"Canaux de magma",danger:5,characters:"—",places:"—"},
+"Border_TheRift":{name:"The Rift",nation:"Aging Lands (indépendant)",color:"#3a1a3a",desc:"Fissure dans la réalité elle-même, ouverte par un événement catastrophique non élucidé.",image:"",population:"—",races:"Entités dimensionnelles",environment:"Fissure dimensionnelle",danger:5,characters:"—",places:"—"},
+"Border_SedimentalFlows":{name:"Sedimental Flows",nation:"Aging Lands (indépendant)",color:"#6a5a3a",desc:"Flots de sédiments en mouvement perpétuel, sculptant le paysage au fil du temps.",image:"",population:"—",races:"—",environment:"Géologique",danger:3,characters:"—",places:"—"},
+"Border_FarworldFlowerFields":{name:"Farworld Flower Fields",nation:"Aging Lands (indépendant)",color:"#5a4a6a",desc:"Champs de fleurs d'un autre monde, aux couleurs impossibles et aux propriétés inconnues.",image:"",population:"—",races:"—",environment:"Champs extra-dimensionnels",danger:3,characters:"—",places:"—"},
+"Border_MarchOfTheGiants":{name:"March of the Giants",nation:"Aging Lands (indépendant)",color:"#7a5a4a",desc:"Territoire où de gigantesques créatures errantes ont laissé leurs empreintes sur la roche.",image:"",population:"—",races:"Géants disparus",environment:"Plaines de géants",danger:4,characters:"—",places:"—"},
+"Border_ColdFlues":{name:"Cold Flues",nation:"Aging Lands (indépendant)",color:"#5a6a8a",desc:"Cheminées de froid d'où s'échappent des courants d'air glacial depuis les profondeurs.",image:"",population:"—",races:"Créatures de glace",environment:"Cheminées froides",danger:3,characters:"—",places:"—"},
+"Border_UpperFields":{name:"Upper Fields",nation:"Aging Lands (indépendant)",color:"#5a5a4a",desc:"Champs supérieurs aux confins des Aging Lands, balayés par des vents constants.",image:"",population:"~300 (fermiers)",races:"Fermiers insectes",environment:"Champs agricoles",danger:2,characters:"—",places:"—"},
+"Border_EasternFields":{name:"Eastern Fields",nation:"Aging Lands (indépendant)",color:"#5a5a3a",desc:"Champs orientaux, frontière naturelle entre les Aging Lands et les terres inexplorées.",image:"",population:"~200",races:"Pionniers",environment:"Champs frontaliers",danger:3,characters:"—",places:"—"},
+"Border_LuxuriantFields":{name:"Luxuriant Fields",nation:"Aging Lands (indépendant)",color:"#4a6a3a",desc:"Champs luxuriants d'une fertilité exceptionnelle, véritable grenier des Aging Lands.",image:"",population:"~1 000 (agriculteurs)",races:"Insectes agriculteurs",environment:"Champs fertiles",danger:1,characters:"—",places:"—"},
+"Border_WesternFields":{name:"Western Fields",nation:"Aging Lands (indépendant)",color:"#5a5a3a",desc:"Champs occidentaux disputés entre plusieurs royaumes des Aging Lands.",image:"",population:"~400",races:"Soldats, Fermiers",environment:"Champs en dispute",danger:3,characters:"—",places:"—"},
+"Border_Wyrnest":{name:"Wyrnest",nation:"Aging Lands (indépendant)",color:"#6a4a2a",desc:"Nid des Wyrms, créatures serpentines colossales qui y pondent leurs œufs millénaires.",image:"",population:"Variable (Wyrms)",races:"Wyrms",environment:"Nid colossal",danger:5,characters:"Mère des Wyrms",places:"—"},
+
+// ─── SOULTAKER'S SOUL ─────────────────────────────────────────────────────────
+"Border_SoultakersSoul":{name:"Soultaker's Soul",nation:"Dimension à part",color:"#6a2a6a",desc:"Dimension onirique et tourmentée existant dans l'âme d'une entité appelée le Voleur d'Âmes. Ses lois physiques sont celles de la douleur et du regret.",image:"",population:"Âmes capturées",races:"Âmes, Entités de douleur",environment:"Dimension psychique, Cauchemar",danger:5,characters:"Le Voleur d'Âmes",places:"Soul Citadel, Soul's Core"},
+"Border_Éternité":{name:"Éternité",nation:"Soultaker's Soul",color:"#6a2a6a",desc:"Zone d'éternité figée où le temps ne s'écoule plus. Les âmes y sont prisonnières d'un instant répété à l'infini.",image:"",population:"—",races:"Âmes figées",environment:"Dimension hors du temps",danger:4,characters:"—",places:"—"},
+"Border_SoulsCore":{name:"Soul's Core",nation:"Soultaker's Soul",color:"#6a2a6a",desc:"Cœur de l'âme du Voleur, source de sa puissance et point de faiblesse ultime.",image:"",population:"—",races:"Gardiens du Cœur",environment:"Cœur psychique",danger:5,characters:"Gardien du Cœur",places:"—"},
+"Border_ParanoidFields":{name:"Paranoid Fields",nation:"Soultaker's Soul",color:"#6a2a6a",desc:"Champs de la paranoïa où chaque ombre semble menaçante et chaque son un danger imminent.",image:"",population:"—",races:"Illusions paranoïaques",environment:"Plaines psychiques",danger:4,characters:"—",places:"—"},
+"Border_RegretsGrasses":{name:"Regrets Grasses",nation:"Soultaker's Soul",color:"#6a2a6a",desc:"Prairies des regrets où les âmes revivent en boucle leurs erreurs passées, incapables de s'en libérer.",image:"",population:"Âmes perdues",races:"Âmes condamnées",environment:"Prairies psychiques",danger:3,characters:"—",places:"—"},
+"Border_SoulCitadel":{name:"Soul Citadel",nation:"Soultaker's Soul",color:"#6a2a6a",desc:"Citadelle d'âme, forteresse psychique où le Voleur d'Âmes règne sur ses captifs depuis des millénaires.",image:"",population:"~5 000 (âmes)",races:"Âmes captives",environment:"Citadelle psychique",danger:5,characters:"Le Voleur d'Âmes",places:"Salle du Jugement"},
+"Border_CityOfTreachery":{name:"City of Treachery",nation:"Soultaker's Soul",color:"#6a2a6a",desc:"Cité de la trahison, métropole psychique peuplée d'âmes qui se trahissent mutuellement pour survivre.",image:"",population:"~2 000 (âmes)",races:"Âmes traîtresses",environment:"Cité psychique",danger:4,characters:"—",places:"—"},
+"Border_SavagesTribe":{name:"Savages Tribe",nation:"Soultaker's Soul",color:"#6a2a6a",desc:"Tribu d'âmes sauvages qui ont abandonné leur humanité pour survivre dans cette dimension hostile.",image:"",population:"~500 (âmes)",races:"Âmes sauvages",environment:"Camps primitifs psychiques",danger:4,characters:"Chef des Sauvages",places:"—"},
+
+// ─── MODERN LANDS ─────────────────────────────────────────────────────────────
+"Border_ModernLands":{name:"Modern Lands",nation:"Région principale",color:"#3a5a7a",desc:"Terres de la modernité industrielle, où la technologie a transformé les paysages naturels en métropoles bourdonnantes.",image:"",population:"~200 000",races:"Insectes industriels, Robots, Constructs",environment:"Urbain, Industriel, Mécanique",danger:3,characters:"—",places:"City of Steel, Calisto, Junkanestu"},
+
+// Junkanestu
+"Border_Junkanestu":{name:"Junkanestu",nation:"Modern Lands",color:"#4a6a5a",desc:"Nation aux quatre saisons distinctes, bâtie sur l'harmonie entre technologie et nature. Ses paysages alternent entre forêts industrielles et prairies mécanisées.",image:"",population:"~40 000",races:"Insectes saisonniers, Artisans",environment:"Saisons marquées, Forêts, Canaux",danger:2,characters:"Kagutsushi",places:"Meridian, Kagatsushi's Temple"},
+"Border_WinterGlassDaedals":{name:"Winter Glass Daedals",nation:"Junkanestu — Modern Lands",color:"#4a6a5a",desc:"Labyrinthes de verre de glace créés par les artisans de l'hiver, merveilles architecturales éphémères.",image:"",population:"~200",races:"Artisans de glace",environment:"Labyrinthe de glace",danger:2,characters:"—",places:"—"},
+"Border_SpringHills":{name:"Spring Hills",nation:"Junkanestu — Modern Lands",color:"#4a7a4a",desc:"Collines printanières couvertes de fleurs éphémères qui n'éclosent qu'une fois par an.",image:"",population:"~500",races:"Insectes printaniers",environment:"Collines fleuries",danger:1,characters:"—",places:"—"},
+"Border_TropicalGroundwaters":{name:"Tropical Groundwaters",nation:"Junkanestu — Modern Lands",color:"#4a6a5a",desc:"Eaux souterraines à température tropicale, créant un écosystème subtropical souterrain unique.",image:"",population:"~300",races:"Insectes tropicaux",environment:"Souterrain tropical",danger:2,characters:"—",places:"—"},
+"Border_MadmasksStage":{name:"Madmasks Stage",nation:"Junkanestu — Modern Lands",color:"#4a6a5a",desc:"Scène des masques fous, théâtre permanent où les acteurs masqués jouent des pièces aux significations cryptiques.",image:"",population:"~200 (acteurs)",races:"Artistes masqués",environment:"Théâtre",danger:2,characters:"Maître des Masques",places:"—"},
+"Border_Meridian":{name:"Meridian",nation:"Junkanestu — Modern Lands",color:"#4a6a5a",desc:"Ville centrale de Junkanestu, carrefour de toutes les saisons et de toutes les cultures de la nation.",image:"",population:"~8 000",races:"Insectes de toutes origines",environment:"Ville cosmopolite",danger:1,characters:"Gouverneur de Meridian",places:"—"},
+"Border_CoolingCanals":{name:"Cooling Canals",nation:"Junkanestu — Modern Lands",color:"#4a6a5a",desc:"Canaux de refroidissement industriel traversant Junkanestu, créant des zones de fraîcheur artificielle.",image:"",population:"~100 (opérateurs)",races:"Techniciens",environment:"Canaux industriels",danger:1,characters:"—",places:"—"},
+"Border_BlacksmithsVillage":{name:"Blacksmith's Village",nation:"Junkanestu — Modern Lands",color:"#4a6a5a",desc:"Village de forgerons réputés dans tout le monde connu pour la qualité exceptionnelle de leurs armes.",image:"",population:"~600 (artisans)",races:"Forgerons insectes",environment:"Village artisanal",danger:1,characters:"Maître Forgeron",places:"Grande Forge"},
+"Border_SmeltFunnel":{name:"Smelt Funnel",nation:"Junkanestu — Modern Lands",color:"#4a6a5a",desc:"Entonnoir de fonte géant convertissant le minerai brut en métal raffiné prêt à l'emploi.",image:"",population:"~150 (ouvriers)",races:"Ouvriers industriels",environment:"Industriel",danger:3,characters:"—",places:"—"},
+"Border_SummerMist":{name:"Summer Mist",nation:"Junkanestu — Modern Lands",color:"#4a6a5a",desc:"Brume estivale créée par l'évaporation des canaux, conférant une atmosphère romantique à la région.",image:"",population:"~400",races:"Insectes des brumes",environment:"Brume estivale",danger:1,characters:"—",places:"—"},
+"Border_AutomnHotSprings":{name:"Autumn Hot Springs",nation:"Junkanestu — Modern Lands",color:"#4a6a5a",desc:"Sources thermales automnales dont les eaux prennent une teinte orangée caractéristique de la saison.",image:"",population:"~300 (visiteurs)",races:"Divers",environment:"Sources thermales",danger:1,characters:"—",places:"—"},
+"Border_DishonoredIrons":{name:"Dishonored Irons",nation:"Junkanestu — Modern Lands",color:"#4a6a5a",desc:"Prison pour ceux qui ont trahi l'honneur de Junkanestu. Les détenus y travaillent le métal comme punition.",image:"",population:"~200 (prisonniers)",races:"Prisonniers",environment:"Prison industrielle",danger:3,characters:"—",places:"—"},
+"Border_KagutsushisTemple":{name:"Kagutsushi's Temple",nation:"Junkanestu — Modern Lands",color:"#4a6a5a",desc:"Temple dédié à Kagutsushi, dieu du feu de Junkanestu, où les flammes sacrées guident les forgerons.",image:"",population:"~100 (prêtres)",races:"Prêtres du feu",environment:"Temple",danger:2,characters:"Kagutsushi (dieu)",places:"Flammes de Kagutsushi"},
+"Border_ShrinesDescent":{name:"Shrines Descent",nation:"Junkanestu — Modern Lands",color:"#4a6a5a",desc:"Descente parsemée de petits sanctuaires, chemin de pèlerinage vers les profondeurs sacrées.",image:"",population:"Variable (pèlerins)",races:"Pèlerins",environment:"Chemin sacré",danger:2,characters:"—",places:"—"},
+
+// City of Steel
+"Border_CityOfSteel":{name:"City of Steel",nation:"Modern Lands",color:"#4a4a5a",desc:"Métropole d'acier colossale, centre industriel et militaire des Modern Lands. Ses tours d'acier percent les nuages.",image:"",population:"~80 000",races:"Insectes industriels, Robots, Constructs",environment:"Urbain, Industriel, Défensif",danger:3,characters:"Le Conseil de l'Acier, L'Overseer",places:"Steel City, Reactor, Factory"},
+"Border_VoidRig":{name:"Void Rig",nation:"City of Steel — Modern Lands",color:"#4a4a5a",desc:"Plateforme industrielle flottant au-dessus d'un gouffre de Vide pur, récoltant son énergie.",image:"",population:"~200 (opérateurs)",races:"Spécialistes du Vide",environment:"Plateforme industrielle",danger:5,characters:"—",places:"—"},
+"Border_Chrysalis":{name:"Chrysalis",nation:"City of Steel — Modern Lands",color:"#4a4a5a",desc:"Zone de transformation où les citoyens peuvent altérer leur forme physique grâce à la technologie.",image:"",population:"~500",races:"Êtres en transformation",environment:"Laboratoire de transformation",danger:2,characters:"—",places:"—"},
+"Border_Council":{name:"Council",nation:"City of Steel — Modern Lands",color:"#4a4a5a",desc:"Siège du Conseil gouvernant la City of Steel, forteresse administrative et judiciaire.",image:"",population:"~1 000 (officiels)",races:"Élite administrative",environment:"Palais gouvernemental",danger:2,characters:"Le Conseil de l'Acier",places:"Chambre des Délibérations"},
+"Border_DefenseF0":{name:"Defense F0",nation:"City of Steel — Modern Lands",color:"#4a4a5a",desc:"Première ligne de défense extérieure, composée de tourelles automatiques et de tranchées profondes.",image:"",population:"~2 000 (soldats)",races:"Soldats insectes, Automates",environment:"Défenses militaires",danger:4,characters:"—",places:"—"},
+"Border_Livestocks":{name:"Livestocks",nation:"City of Steel — Modern Lands",color:"#4a4a5a",desc:"Zone d'élevage industriel nourrissant la population massive de la City of Steel.",image:"",population:"~500 (éleveurs)",races:"Éleveurs, Animaux d'élevage",environment:"Ferme industrielle",danger:1,characters:"—",places:"—"},
+"Border_Reactor":{name:"Reactor",nation:"City of Steel — Modern Lands",color:"#4a4a5a",desc:"Réacteur central alimentant toute la City of Steel en énergie. Protégé par vingt lignes de défense.",image:"",population:"~300 (ingénieurs)",races:"Ingénieurs spécialisés",environment:"Réacteur industriel",danger:5,characters:"Ingénieur en Chef",places:"—"},
+"Border_Factory":{name:"Factory",nation:"City of Steel — Modern Lands",color:"#4a4a5a",desc:"Usine de production armée produisant armes, armures et machines de guerre en continu.",image:"",population:"~5 000 (ouvriers)",races:"Ouvriers insectes",environment:"Usine industrielle",danger:2,characters:"—",places:"—"},
+"Border_SteamStation":{name:"Steam Station",nation:"City of Steel — Modern Lands",color:"#4a4a5a",desc:"Gare à vapeur centrale de la City of Steel, hub de transport reliant tous les districts.",image:"",population:"~10 000 (passagers/j)",races:"Divers voyageurs",environment:"Gare, Transport",danger:1,characters:"—",places:"—"},
+"Border_Playground":{name:"Playground",nation:"City of Steel — Modern Lands",color:"#4a4a5a",desc:"Zone de loisirs mécaniques pour les habitants de la City of Steel, oasis de détente dans la métropole.",image:"",population:"Variable",races:"Citoyens",environment:"Zone de loisirs",danger:1,characters:"—",places:"—"},
+"Border_SteelCity":{name:"Steel City",nation:"City of Steel — Modern Lands",color:"#4a4a5a",desc:"Cœur urbain de la City of Steel, mégapole verticale aux buildings d'acier vertigineux.",image:"",population:"~50 000",races:"Toutes races des Modern Lands",environment:"Métropole urbaine",danger:2,characters:"—",places:"—"},
+"Border_Cleanwaters":{name:"Cleanwaters",nation:"City of Steel — Modern Lands",color:"#4a4a5a",desc:"District des eaux purifiées, zone résidentielle haut de gamme alimentée en eau pure.",image:"",population:"~5 000 (élites)",races:"Élites de la City",environment:"District résidentiel",danger:1,characters:"—",places:"—"},
+"Border_SacredGrove":{name:"Sacred Grove",nation:"City of Steel — Modern Lands",color:"#4a4a5a",desc:"Rare parcelle de nature préservée au cœur de la métropole d'acier, sanctuaire sacré et protégé.",image:"",population:"~100 (gardiens)",races:"Gardiens de nature",environment:"Forêt sacrée urbaine",danger:1,characters:"—",places:"—"},
+"Border_Azurline":{name:"Azurline",nation:"City of Steel — Modern Lands",color:"#4a4a5a",desc:"Ligne de transport azur, artère principale de déplacement dans la City of Steel.",image:"",population:"Variable",races:"—",environment:"Transport métropolitain",danger:1,characters:"—",places:"—"},
+"Border_DefenseF3":{name:"Defense F3",nation:"City of Steel — Modern Lands",color:"#4a4a5a",desc:"Troisième ligne de défense intérieure, murs énergétiques et drones de combat autonomes.",image:"",population:"~1 000 (soldats)",races:"Soldats d'élite",environment:"Défenses avancées",danger:4,characters:"—",places:"—"},
+"Border_VapeursGarden":{name:"Vapeurs Garden",nation:"City of Steel — Modern Lands",color:"#4a4a5a",desc:"Jardin de vapeur industrielle reconverti en espace vert, décor surréaliste prisé des habitants.",image:"",population:"~500 (visiteurs)",races:"Touristes, Citoyens",environment:"Jardin industriel",danger:1,characters:"—",places:"—"},
+"Border_DefenseF2":{name:"Defense F2",nation:"City of Steel — Modern Lands",color:"#4a4a5a",desc:"Deuxième ligne de défense, mix de soldats biologiques et de tourelles automatiques.",image:"",population:"~1 500 (soldats)",races:"Soldats mécaniques et biologiques",environment:"Zone militaire",danger:4,characters:"—",places:"—"},
+"Border_GreyshardsMines":{name:"Greyshards Mines",nation:"City of Steel — Modern Lands",color:"#4a4a5a",desc:"Mines d'éclats gris, minerai indispensable à la production de l'acier spécial de la City.",image:"",population:"~1 000 (mineurs)",races:"Mineurs insectes",environment:"Mines industrielles",danger:3,characters:"—",places:"—"},
+"Border_ForgottenShrine":{name:"Forgotten Shrine",nation:"City of Steel — Modern Lands",color:"#4a4a5a",desc:"Sanctuaire oublié englouti par l'expansion industrielle, dernier vestige du monde d'avant.",image:"",population:"—",races:"Esprits anciens",environment:"Sanctuaire sous l'acier",danger:2,characters:"—",places:"—"},
+"Border_Outpost":{name:"Outpost",nation:"City of Steel — Modern Lands",color:"#4a4a5a",desc:"Avant-poste militaire à la frontière du territoire contrôlé par la City of Steel.",image:"",population:"~200 (soldats)",races:"Soldats de frontière",environment:"Avant-poste militaire",danger:3,characters:"—",places:"—"},
+"Border_RustCity":{name:"Rust City",nation:"City of Steel — Modern Lands",color:"#4a4a5a",desc:"Ville de la rouille, district dégradé où les plus pauvres vivent dans des structures en décomposition.",image:"",population:"~8 000 (pauvres)",races:"Exclus de la City",environment:"Bidonville industriel",danger:3,characters:"—",places:"—"},
+"Border_Overseer":{name:"Overseer",nation:"City of Steel — Modern Lands",color:"#4a4a5a",desc:"Tour de surveillance dominée par l'Overseer, intelligence artificielle contrôlant la sécurité de toute la City.",image:"",population:"—",races:"IA, Drones",environment:"Tour de surveillance",danger:3,characters:"L'Overseer (IA)",places:"—"},
+"Border_CablesForest":{name:"Cables Forest",nation:"City of Steel — Modern Lands",color:"#4a4a5a",desc:"Forêt de câbles enchevêtrés, district technique où les hackers et ingénieurs cohabitent.",image:"",population:"~2 000 (techniciens)",races:"Ingénieurs, Hackers",environment:"District technique",danger:2,characters:"—",places:"—"},
+"Border_DefenseF1":{name:"Defense F1",nation:"City of Steel — Modern Lands",color:"#4a4a5a",desc:"Première ligne de défense intérieure, murs d'acier renforcé et soldats d'élite.",image:"",population:"~2 500 (soldats)",races:"Soldats d'élite",environment:"Murs défensifs",danger:4,characters:"Général de la Défense",places:"—"},
+"Border_Outskirts":{name:"Outskirts",nation:"City of Steel — Modern Lands",color:"#4a4a5a",desc:"Banlieues périphériques de la City of Steel, zone de transition entre la métropole et le monde extérieur.",image:"",population:"~10 000",races:"Mixte",environment:"Banlieues",danger:2,characters:"—",places:"—"},
+
+// Calisto
+"Border_Calisto":{name:"Calisto",nation:"Modern Lands",color:"#5a3a6a",desc:"Entité vivante gigantesque utilisée comme ville. Ses organes internes sont habités et ses fonctions biologiques exploitées comme ressources industrielles.",image:"",population:"~30 000",races:"Parasites sapients, Insectes internes",environment:"Organique, Biologique, Corporel",danger:4,characters:"Le Gouverneur de l'Œil",places:"Heart, Eye Throne, Entrance"},
+"Border_Entrance":{name:"Entrance",nation:"Calisto — Modern Lands",color:"#5a3a6a",desc:"Entrée de Calisto, orifice contrôlé permettant l'accès à l'intérieur de la créature.",image:"",population:"~500 (gardes)",races:"Gardes de l'entrée",environment:"Orifice biologique",danger:3,characters:"—",places:"—"},
+"Border_Experia":{name:"Experia",nation:"Calisto — Modern Lands",color:"#5a3a6a",desc:"Zone d'expérience sensorielle, district touristique exploitant les sensations organiques uniques de Calisto.",image:"",population:"~2 000",races:"Touristes, Guides",environment:"District expérientiel",danger:2,characters:"—",places:"—"},
+"Border_KidneyMines":{name:"Kidney Mines",nation:"Calisto — Modern Lands",color:"#5a3a6a",desc:"Mines exploitant les reins de Calisto pour extraire des minéraux filtrés de grande valeur.",image:"",population:"~500 (mineurs)",races:"Mineurs biologiques",environment:"Organe rénal exploité",danger:3,characters:"—",places:"—"},
+"Border_Hotel":{name:"Hotel",nation:"Calisto — Modern Lands",color:"#5a3a6a",desc:"Hôtel de luxe aménagé dans les tissus mous de Calisto, offrant un confort biologique incomparable.",image:"",population:"~300 (clients)",races:"Visiteurs fortunés",environment:"Hôtel organique",danger:1,characters:"—",places:"—"},
+"Border_Innards":{name:"Innards",nation:"Calisto — Modern Lands",color:"#5a3a6a",desc:"Entrailles de Calisto, zone centrale où tout transite entre les différents organes-districts.",image:"",population:"~1 000",races:"Habitants permanents",environment:"Viscères centrales",danger:3,characters:"—",places:"—"},
+"Border_Stomach":{name:"Stomach",nation:"Calisto — Modern Lands",color:"#5a3a6a",desc:"Estomac de Calisto reconverti en zone industrielle de décomposition et de recyclage.",image:"",population:"~800 (ouvriers)",races:"Ouvriers acido-résistants",environment:"Estomac industriel",danger:4,characters:"—",places:"—"},
+"Border_BackStation":{name:"Back Station",nation:"Calisto — Modern Lands",color:"#5a3a6a",desc:"Station de transport dorsale reliant les districts postérieurs de Calisto.",image:"",population:"~300",races:"Voyageurs",environment:"Hub de transport",danger:2,characters:"—",places:"—"},
+"Border_ProductionChain":{name:"Production Chain",nation:"Calisto — Modern Lands",color:"#5a3a6a",desc:"Chaîne de production biologique transformant les sécrétions de Calisto en ressources utilisables.",image:"",population:"~2 000 (ouvriers)",races:"Ouvriers biologiques",environment:"Usine biologique",danger:3,characters:"—",places:"—"},
+"Border_Reconditionning":{name:"Reconditioning",nation:"Calisto — Modern Lands",color:"#5a3a6a",desc:"Zone de reconditionnement où les habitants déviants sont réintégrés au système de Calisto.",image:"",population:"~200 (détenus)",races:"Individus reconditionnnés",environment:"Centre de rééducation",danger:3,characters:"—",places:"—"},
+"Border_Laboratory":{name:"Laboratory",nation:"Calisto — Modern Lands",color:"#5a3a6a",desc:"Laboratoire de recherche biologique explorant les limites du corps de Calisto.",image:"",population:"~300 (scientifiques)",races:"Chercheurs biologiques",environment:"Laboratoire",danger:3,characters:"Chercheur en Chef",places:"—"},
+"Border_Crack":{name:"Crack",nation:"Calisto — Modern Lands",color:"#5a3a6a",desc:"Fissure dans la paroi de Calisto, zone dangereuse d'où s'échappent des fluides acides.",image:"",population:"—",races:"—",environment:"Fissure biologique",danger:5,characters:"—",places:"—"},
+"Border_VoidbloodBasins":{name:"Voidblood Basins",nation:"Calisto — Modern Lands",color:"#5a3a6a",desc:"Bassins de sang du Vide, liquide biologique aux propriétés énergétiques uniques à Calisto.",image:"",population:"~100 (collecteurs)",races:"Collecteurs spécialisés",environment:"Bassins biologiques",danger:4,characters:"—",places:"—"},
+"Border_WastesSewers":{name:"Wastes Sewers",nation:"Calisto — Modern Lands",color:"#5a3a6a",desc:"Égouts biologiques de Calisto, système d'évacuation des déchets de l'organisme.",image:"",population:"~200 (travailleurs)",races:"Travailleurs des égouts",environment:"Égouts biologiques",danger:3,characters:"—",places:"—"},
+"Border_Gutroads":{name:"Gutroads",nation:"Calisto — Modern Lands",color:"#5a3a6a",desc:"Routes intestinales de Calisto, voies de communication à l'intérieur des intestins de la créature.",image:"",population:"Variable (voyageurs)",races:"Voyageurs",environment:"Intestins comme routes",danger:3,characters:"—",places:"—"},
+"Border_Clot":{name:"Clot",nation:"Calisto — Modern Lands",color:"#5a3a6a",desc:"Caillot sanguin géant servant de quartier résidentiel compact et extrêmement dense.",image:"",population:"~3 000",races:"Habitants compacts",environment:"Caillot résidentiel",danger:2,characters:"—",places:"—"},
+"Border_Liver":{name:"Liver",nation:"Calisto — Modern Lands",color:"#5a3a6a",desc:"Foie de Calisto reconverti en district de purification et de traitement chimique.",image:"",population:"~1 000 (purificateurs)",races:"Chimistes biologiques",environment:"Organe de purification",danger:2,characters:"—",places:"—"},
+"Border_Clonning":{name:"Cloning",nation:"Calisto — Modern Lands",color:"#5a3a6a",desc:"Zone de clonage biologique produisant des copies expérimentales à des fins scientifiques.",image:"",population:"~200 (scientifiques)",races:"Chercheurs",environment:"Laboratoire de clonage",danger:4,characters:"—",places:"—"},
+"Border_Elits":{name:"Elites",nation:"Calisto — Modern Lands",color:"#5a3a6a",desc:"District des élites vivant dans les zones les plus nobles et les plus stables de Calisto.",image:"",population:"~2 000 (élites)",races:"Élites biologiques",environment:"District premium",danger:1,characters:"—",places:"—"},
+"Border_CircuitsUnderworks":{name:"Circuits Underworks",nation:"Calisto — Modern Lands",color:"#5a3a6a",desc:"Infrastructures neurologiques de Calisto, réseau nerveux exploité comme système informatique.",image:"",population:"~500 (techniciens)",races:"Techniciens neurologiques",environment:"Réseau nerveux",danger:3,characters:"—",places:"—"},
+"Border_Tumor":{name:"Tumor",nation:"Calisto — Modern Lands",color:"#5a3a6a",desc:"Tumeur de Calisto, masse anarchique dont la croissance menace l'équilibre du système entier.",image:"",population:"~500 (résidents)",races:"Habitants anarchiques",environment:"Tumeur biologique",danger:4,characters:"—",places:"—"},
+"Border_Ventillations":{name:"Ventilations",nation:"Calisto — Modern Lands",color:"#5a3a6a",desc:"Système pulmonaire de Calisto reconverti en réseau de ventilation pour tous les districts.",image:"",population:"~300 (techniciens)",races:"Techniciens de l'air",environment:"Poumons industrialisés",danger:2,characters:"—",places:"—"},
+"Border_Heart":{name:"Heart",nation:"Calisto — Modern Lands",color:"#5a3a6a",desc:"Cœur de Calisto, zone la plus protégée et la plus vitale. S'en approcher est presque impossible.",image:"",population:"—",races:"Gardiens ultimes",environment:"Cœur biologique",danger:5,characters:"Gardiens du Cœur",places:"—"},
+"Border_Lung":{name:"Lung",nation:"Calisto — Modern Lands",color:"#5a3a6a",desc:"Poumons de Calisto, vastes cavernes d'air pur servant de réserves respiratoires.",image:"",population:"~500",races:"Habitants de l'air",environment:"Cavernes pulmonaires",danger:2,characters:"—",places:"—"},
+"Border_FrontStation":{name:"Front Station",nation:"Calisto — Modern Lands",color:"#5a3a6a",desc:"Station frontale principale, point d'entrée et de sortie le plus fréquenté de Calisto.",image:"",population:"~5 000 (passagers/j)",races:"Voyageurs",environment:"Station de transport",danger:2,characters:"—",places:"—"},
+"Border_BlueHive":{name:"Blue Hive",nation:"Calisto — Modern Lands",color:"#5a3a6a",desc:"Ruche bleue, colonie d'insectes parasites utiles vivant en symbiose bénéfique avec Calisto.",image:"",population:"~10 000 (ruche)",races:"Insectes parasites-symbiotiques",environment:"Ruche biologique",danger:2,characters:"Reine de la Ruche Bleue",places:"—"},
+"Border_EyeThrone":{name:"Eye Throne",nation:"Calisto — Modern Lands",color:"#5a3a6a",desc:"Trône de l'œil, siège de gouvernement aménagé dans l'œil central de Calisto.",image:"",population:"~300 (gouvernants)",races:"Élite dirigeante",environment:"Œil gouvernemental",danger:3,characters:"Le Gouverneur de l'Œil",places:"—"},
+
+// Goldleaf's Country
+"Border_GoldleafsCountry":{name:"Goldleaf's Country",nation:"Modern Lands",color:"#8a7a2a",desc:"Pays des feuilles d'or, contrée verdoyante et riche dont les forêts produisent des feuilles à haute valeur commerciale.",image:"",population:"~20 000",races:"Insectes forestiers, Cerfs-volants",environment:"Forêts dorées, Châteaux, Jardins",danger:2,characters:"Seigneur des Feuilles d'Or",places:"Stronghold, Golden Garden, Chapel"},
+"Border_Cliff":{name:"Cliff",nation:"Goldleaf's Country — Modern Lands",color:"#8a7a2a",desc:"Falaise dominant le pays, poste d'observation naturel offrant une vue sur toute la région.",image:"",population:"~100 (gardes)",races:"Gardes des falaises",environment:"Falaise",danger:2,characters:"—",places:"—"},
+"Border_Vall":{name:"Vall",nation:"Goldleaf's Country — Modern Lands",color:"#8a7a2a",desc:"Vallée fertile au cœur du pays, principale zone agricole et résidentielle de la nation.",image:"",population:"~5 000",races:"Fermiers, Artisans",environment:"Vallée fertile",danger:1,characters:"—",places:"—"},
+"Border_GoldenGarden":{name:"Golden Garden",nation:"Goldleaf's Country — Modern Lands",color:"#8a7a2a",desc:"Jardin royal aux feuilles d'or authentiques, symbole de prospérité et de fierté nationale.",image:"",population:"~200 (jardiniers)",races:"Jardiniers royaux",environment:"Jardin royal",danger:1,characters:"—",places:"—"},
+"Border_Chapel":{name:"Chapel",nation:"Goldleaf's Country — Modern Lands",color:"#8a7a2a",desc:"Chapelle ancestrale du pays, lieu de culte et de rassemblement communautaire depuis des siècles.",image:"",population:"~50 (clercs)",races:"Clercs",environment:"Chapelle",danger:1,characters:"Archevêque des Feuilles",places:"—"},
+"Border_DuskChamber":{name:"Dusk Chamber",nation:"Goldleaf's Country — Modern Lands",color:"#8a7a2a",desc:"Chambre du crépuscule où les décisions les plus importantes sont prises à la tombée du jour.",image:"",population:"~20 (conseillers)",races:"Conseillers",environment:"Chambre secrète",danger:2,characters:"Conseil du Crépuscule",places:"—"},
+"Border_MudBarrier":{name:"Mud Barrier",nation:"Goldleaf's Country — Modern Lands",color:"#8a7a2a",desc:"Barrière de boue naturelle protégeant le pays des inondations saisonnières.",image:"",population:"~100 (gardiens)",races:"Gardes de la barrière",environment:"Barrière naturelle",danger:2,characters:"—",places:"—"},
+"Border_Deepwoods":{name:"Deepwoods",nation:"Goldleaf's Country — Modern Lands",color:"#8a7a2a",desc:"Forêt profonde aux arbres millénaires dont les feuilles d'or sont les plus précieuses du pays.",image:"",population:"~500 (bûcherons)",races:"Forestiers, Créatures des bois",environment:"Forêt profonde",danger:3,characters:"—",places:"—"},
+"Border_Hornedladder":{name:"Horned Ladder",nation:"Goldleaf's Country — Modern Lands",color:"#8a7a2a",desc:"Échelle à cornes, structure d'escalade permettant d'accéder aux arbres les plus hauts du pays.",image:"",population:"~50 (grimpeurs)",races:"Grimpeurs spécialisés",environment:"Structure de grimpe",danger:2,characters:"—",places:"—"},
+"Border_LighChamber":{name:"Light Chamber",nation:"Goldleaf's Country — Modern Lands",color:"#8a7a2a",desc:"Chambre de lumière concentrant les rayons du soleil pour faire briller les feuilles d'or.",image:"",population:"~30 (opticiens)",races:"Spécialistes de la lumière",environment:"Chambre optique",danger:1,characters:"—",places:"—"},
+"Border_Roof":{name:"Roof",nation:"Goldleaf's Country — Modern Lands",color:"#8a7a2a",desc:"Toit du pays, zone culminante d'où l'on peut voir l'intégralité des forêts d'or.",image:"",population:"~50 (sentinelles)",races:"Sentinelles",environment:"Zone culminante",danger:2,characters:"—",places:"—"},
+"Border_Stronghold":{name:"Stronghold",nation:"Goldleaf's Country — Modern Lands",color:"#8a7a2a",desc:"Forteresse principale du Goldleaf's Country, défense ultime contre les envahisseurs extérieurs.",image:"",population:"~1 000 (soldats)",races:"Soldats d'élite",environment:"Forteresse",danger:3,characters:"Commandant de la Forteresse",places:"—"},
+"Border_Wormpath":{name:"Wormpath",nation:"Goldleaf's Country — Modern Lands",color:"#8a7a2a",desc:"Chemin des vers, tunnel creusé par des vers géants reconverti en route souterraine.",image:"",population:"~200 (voyageurs)",races:"Voyageurs souterrains",environment:"Tunnel organique",danger:2,characters:"—",places:"—"},
+"Border_ShadowGarden":{name:"Shadow Garden",nation:"Goldleaf's Country — Modern Lands",color:"#8a7a2a",desc:"Jardin de l'ombre, complément nécessaire au Golden Garden, cultivant des plantes nocturnes rares.",image:"",population:"~100 (jardiniers)",races:"Jardiniers de l'ombre",environment:"Jardin nocturne",danger:2,characters:"—",places:"—"},
+
+// Modern Lands independents
+"Border_ScelledBattlefields":{name:"Scelled Battlefields",nation:"Modern Lands (indépendant)",color:"#3a5a7a",desc:"Champs de bataille scellés, zones de guerre figées dans le temps par une magie inconnue.",image:"",population:"—",races:"Soldats figés",environment:"Champs de bataille temporels",danger:4,characters:"—",places:"—"},
+"Border_SuspendedCrossing":{name:"Suspended Crossing",nation:"Modern Lands (indépendant)",color:"#3a5a7a",desc:"Croisement suspendu dans les airs par des câbles d'énergie, pont technologique unique.",image:"",population:"~100 (opérateurs)",races:"Techniciens",environment:"Infrastructure suspendue",danger:3,characters:"—",places:"—"},
+"Border_PillarsOfFire":{name:"Pillars of Fire",nation:"Modern Lands (indépendant)",color:"#3a5a7a",desc:"Piliers de feu permanents servant de balises de navigation pour les voyageurs.",image:"",population:"—",races:"—",environment:"Piliers de feu",danger:3,characters:"—",places:"—"},
+"Border_AbyssWall":{name:"Abyss Wall",nation:"Modern Lands (indépendant)",color:"#3a5a7a",desc:"Mur de l'abysse, frontière artificielle empêchant les créatures des abysses de remonter.",image:"",population:"~500 (gardes)",races:"Gardiens du mur",environment:"Mur défensif",danger:5,characters:"Commandant du Mur",places:"—"},
+"Border_Theocide":{name:"Theocide",nation:"Modern Lands (indépendant)",color:"#3a5a7a",desc:"Site du Théocide, lieu où un dieu fut tué et dont l'écho résonne encore dans la réalité.",image:"",population:"—",races:"Fragments divins",environment:"Site sacré/maudit",danger:5,characters:"—",places:"—"},
+"Border_TornadoTendrils":{name:"Tornado Tendrils",nation:"Modern Lands (indépendant)",color:"#3a5a7a",desc:"Tentacules de tornades permanentes, phénomène météorologique inexpliqué menaçant la navigation.",image:"",population:"—",races:"—",environment:"Zone météorologique extrême",danger:5,characters:"—",places:"—"},
+"Border_TempestEdge":{name:"Tempest Edge",nation:"Modern Lands (indépendant)",color:"#3a5a7a",desc:"Bord de la tempête, frontière entre la civilisation et le chaos atmosphérique permanent.",image:"",population:"~50 (sentinelles)",races:"Sentinelles météo",environment:"Frontière tempétueuse",danger:4,characters:"—",places:"—"},
+"Border_Crumbling":{name:"Crumbling",nation:"Modern Lands (indépendant)",color:"#3a5a7a",desc:"Zone en effondrement progressif, la roche se désintégrant lentement depuis des siècles.",image:"",population:"—",races:"—",environment:"Zone géologique instable",danger:5,characters:"—",places:"—"},
+"Border_GreatUnknown":{name:"Great Unknown",nation:"Modern Lands (indépendant)",color:"#3a5a7a",desc:"Le Grand Inconnu, zone inexpliquée dont la nature même résiste à toute tentative de compréhension.",image:"",population:"Inconnue",races:"Inconnues",environment:"Inconnu",danger:5,characters:"—",places:"—"},
+
+// ─── THE HIGH COLONY ──────────────────────────────────────────────────────────
+"Border_TheHighColony":{name:"The High Colony",nation:"Région principale",color:"#6a8a9a",desc:"Colonie aérienne évoluée suspendue dans les hauteurs, inaccessible depuis le sol. Une société distincte s'y est développée, coupée du reste du monde depuis des siècles.",image:"",population:"~25 000",races:"Insectes volants, Évolués des hauteurs",environment:"Aérien, Nuages, Plateformes suspendues",danger:2,characters:"Le Haut Conseil",places:"—"},
+
+}; // fin REGIONS
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  MOTEUR — ne pas modifier
+// ═══════════════════════════════════════════════════════════════════════════════
+const SVG_URL="https://raw.githubusercontent.com/matthieupuydoyeux-a11y/HK-FullWorldMap/ae70669291d5fdeb71a510c162507b548f785d9a/Map.svg";
+const DL=["","Sûr (1/5)","Faible (2/5)","Modéré (3/5)","Élevé (4/5)","Extrême (5/5)"];
+const DC=["","#4a8a4a","#7a8a4a","#8a7a3a","#8a5a3a","#8a3a3a"];
+
+// ── Classification des niveaux ────────────────────────────────────────────────
+// Niveau 0 : Grandes régions  → nation === "Région principale" ou "Dimension à part"
+// Niveau 1 : Nations + zones indépendantes → nation est un nom de région seul (sans " — ")
+// Niveau 2 : Zones précises → nation contient " — "
+function getLevel(id){
+  const d=REGIONS[id];
+  if(!d) return -1; // id inconnu, on l'ignore
+  const n=d.nation||"";
+  if(n==="Région principale"||n==="Dimension à part") return 0;
+  if(n.includes(" — ")||n.includes("(indépendant)")) return 2;
+  // Soultaker's Soul est une dimension (niveau 0) sans nations intermédiaires :
+  // ses zones vont directement au niveau 2
+  if(n==="Soultaker's Soul") return 2;
+  return 1;
+}
+
+const mw=document.getElementById("mw");
+const mi=document.getElementById("mi");
+const panel=document.getElementById("panel");
+let sc=1,tx=0,ty=0,drag=false,sx=0,sy=0,stx=0,sty=0,activeEl=null;
+let svgW=0,svgH=0;
+let currentLevel=0; // niveau actif par défaut
+let borderEls=[]; // tous les éléments Border_ du SVG
+
+// ── Applique le filtre de niveau ──────────────────────────────────────────────
+function applyLevelFilter(level){
+  currentLevel=level;
+  closePanel();
+  borderEls.forEach(el=>{
+    const lv=getLevel(el.id);
+    if(lv===level){
+      // Niveau actif : activer le groupe et tous ses enfants
+      el.style.pointerEvents="all";
+      el.querySelectorAll("*").forEach(child=>child.style.pointerEvents="all");
+    } else {
+      // Niveau inactif : désactiver le groupe lui-même
+      el.style.pointerEvents="none";
+      // Désactiver aussi les hit rects qu'on a ajoutés (marqués data-hit-rect)
+      // sans toucher aux autres enfants (royaumes/zones restent cliquables en dessous)
+      el.querySelectorAll("[data-hit-rect]").forEach(r=>r.style.pointerEvents="none");
+    }
+  });
+  document.querySelectorAll(".fb").forEach(fb=>{
+    fb.classList.toggle("active", fb.querySelector("input").value==level);
+  });
+} // dimensions natives du SVG, lues une fois au chargement
+
+async function loadMap(){
+  const lf=document.getElementById("lfill");
+  lf.style.width="25%";
+  try{
+    const res=await fetch(SVG_URL);
+    if(!res.ok) throw new Error("HTTP "+res.status);
+    lf.style.width="70%";
+    const txt=await res.text();
+    mi.innerHTML=txt;
+    const svg=mi.querySelector("svg");
+
+    // ── 1. Lire les dimensions AVANT de supprimer les attributs ──────────────
+    const vb=svg.viewBox.baseVal;
+    svgW=vb.width||parseFloat(svg.getAttribute("width"))||0;
+    svgH=vb.height||parseFloat(svg.getAttribute("height"))||0;
+
+    // Appliquer une taille fixe en pixels = dimensions natives du SVG
+    svg.removeAttribute("width"); svg.removeAttribute("height");
+    svg.style.display="block";
+    svg.style.width=svgW+"px";
+    svg.style.height=svgH+"px";
+    svg.style.overflow="visible";
+
+    // ── 2. Interactions entièrement en JS (ignore les styles internes du SVG) ─
+    // Collecter tous les Border_ et forcer pointer-events via style inline
+    borderEls=Array.from(svg.querySelectorAll("[id]")).filter(el=>el.id.startsWith("Border_"));
+    console.log(`Éléments Border_ trouvés : ${borderEls.length}`);
+
+    // Rendre toute la surface cliquable.
+    // Figma exporte fill="none" sur les paths → seul le contour répond à la souris.
+    // fill="transparent" est visuellement identique mais rend l'intérieur cliquable.
+    // On ajoute aussi un <rect> de couverture (bounding box) comme zone de hit de secours.
+    borderEls.forEach(borderEl=>{
+      // 1. fill="none" → "transparent" sur les formes directes (hors masques/defs)
+      borderEl.querySelectorAll("path,rect,polygon,polyline,ellipse,circle").forEach(shape=>{
+        // Ignorer les éléments à l'intérieur de <mask>, <clipPath>, <defs>
+        let p=shape.parentElement;
+        while(p && p!==borderEl){
+          if(/^(mask|clipPath|defs|symbol)$/i.test(p.tagName)) return;
+          p=p.parentElement;
+        }
+        if(shape.getAttribute("fill")==="none") shape.setAttribute("fill","transparent");
+        if(shape.style.fill==="none") shape.style.fill="transparent";
+      });
+
+      // 2. Rect transparent sur toute la bounding box — uniquement pour les grandes régions (niveau 0).
+      // Inséré en PREMIER enfant (= derrière tout) et marqué pour être géré par le filtre.
+      if(getLevel(borderEl.id)===0){
+        try{
+          const bb=borderEl.getBBox();
+          if(bb.width>0 && bb.height>0){
+            const hit=document.createElementNS("http://www.w3.org/2000/svg","rect");
+            hit.setAttribute("x",bb.x); hit.setAttribute("y",bb.y);
+            hit.setAttribute("width",bb.width); hit.setAttribute("height",bb.height);
+            hit.setAttribute("fill","transparent");
+            hit.dataset.hitRect="true"; // marque pour applyLevelFilter
+            hit.style.pointerEvents="all";
+            borderEl.insertBefore(hit, borderEl.firstChild); // DERRIÈRE tout
+          }
+        }catch(e){}
+      }
+    });
+
+    svg.querySelectorAll("*").forEach(el=>{
+      el.style.pointerEvents="all";
+      el.style.cursor="default";
+    });
+
+    // Trouver le Border_ ancêtre correspondant au niveau actif
+    // Remonte dans le DOM jusqu'à trouver un Border_ dont le niveau == currentLevel
+    function findBorder(el){
+      while(el && el!==svg){
+        if(el.id && el.id.startsWith("Border_") && getLevel(el.id)===currentLevel) return el;
+        el=el.parentElement;
+      }
+      return null;
+    }
+
+    // Click → ouvrir région (seulement si le niveau correspond)
+    svg.addEventListener("click",e=>{
+      const b=findBorder(e.target);
+      if(b && getLevel(b.id)===currentLevel) openRegion(b.id,b);
+      else if(!b) closePanel();
+    });
+
+    // Hover
+    svg.addEventListener("mouseover",e=>{
+      const b=findBorder(e.target);
+      if(b && b!==activeEl && getLevel(b.id)===currentLevel){
+        b.style.filter="brightness(1.8) saturate(1.4) drop-shadow(0 0 4px rgba(255,255,255,0.35))";
+        b.style.cursor="pointer";
+      }
+    });
+    svg.addEventListener("mouseout",e=>{
+      const b=findBorder(e.target);
+      if(b && b!==activeEl) b.style.filter="";
+    });
+
+    // Brancher les boutons radio de filtre
+    document.querySelectorAll("input[name='level']").forEach(radio=>{
+      radio.addEventListener("change",()=>applyLevelFilter(parseInt(radio.value)));
+    });
+
+    lf.style.width="100%";
+    setTimeout(()=>{
+      document.getElementById("loading").style.display="none";
+      fit();
+      applyLevelFilter(0); // appliquer le filtre initial
+    },200);
+
+    lf.style.width="100%";
+    setTimeout(()=>{
+      document.getElementById("loading").style.display="none";
+      fit();
+    },200);
+  }catch(e){
+    document.getElementById("loading").innerHTML=
+      `<p style="color:#7a3a3a;font-size:13px;text-align:center;padding:24px">
+        Erreur de chargement du SVG.<br><small>${e.message}</small><br><br>
+        <span style="color:#444;font-size:11px">Assurez-vous d'ouvrir le fichier via un serveur local<br>(ex: VS Code Live Preview, ou un serveur HTTP).</span>
+      </p>`;
+  }
+}
+
+// ── Fit : centre le SVG dans la fenêtre au démarrage ─────────────────────────
+function fit(){
+  if(!svgW||!svgH) return;
+  const cw=mw.clientWidth, ch=mw.clientHeight;
+  sc=Math.min(cw/svgW, ch/svgH)*0.95;
+  tx=(cw-svgW*sc)/2;
+  ty=(ch-svgH*sc)/2;
+  apply();
+}
+function apply(){mi.style.transform=`translate(${tx}px,${ty}px) scale(${sc})`;document.getElementById("zlvl").textContent=Math.round(sc*100)+"%";}
+function zoom(d){const cx=mw.clientWidth/2,cy=mw.clientHeight/2,ns=Math.min(Math.max(sc*d,.1),20);tx=cx-(cx-tx)*(ns/sc);ty=cy-(cy-ty)*(ns/sc);sc=ns;apply();}
+
+mw.addEventListener("wheel",e=>{
+  e.preventDefault();
+  const r=mw.getBoundingClientRect(),mx=e.clientX-r.left,my=e.clientY-r.top;
+  const d=e.deltaY<0?1.12:.89,ns=Math.min(Math.max(sc*d,.1),20);
+  tx=mx-(mx-tx)*(ns/sc);ty=my-(my-ty)*(ns/sc);sc=ns;apply();
+},{passive:false});
+mw.addEventListener("mousedown",e=>{if(e.button!==0)return;drag=true;sx=e.clientX;sy=e.clientY;stx=tx;sty=ty;mw.classList.add("drag");});
+window.addEventListener("mousemove",e=>{if(!drag)return;tx=stx+e.clientX-sx;ty=sty+e.clientY-sy;apply();});
+window.addEventListener("mouseup",()=>{drag=false;mw.classList.remove("drag");});
+document.getElementById("zi").onclick=()=>zoom(1.25);
+document.getElementById("zo").onclick=()=>zoom(.8);
+document.getElementById("zr").onclick=fit;
+
+let lt=0;
+mw.addEventListener("touchstart",e=>{
+  if(e.touches.length===1){drag=true;sx=e.touches[0].clientX;sy=e.touches[0].clientY;stx=tx;sty=ty;}
+  else if(e.touches.length===2){drag=false;lt=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);}
+},{passive:true});
+mw.addEventListener("touchmove",e=>{
+  e.preventDefault();
+  if(e.touches.length===1&&drag){tx=stx+e.touches[0].clientX-sx;ty=sty+e.touches[0].clientY-sy;apply();}
+  else if(e.touches.length===2){
+    const d=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);
+    const cx=(e.touches[0].clientX+e.touches[1].clientX)/2,cy=(e.touches[0].clientY+e.touches[1].clientY)/2;
+    const r=mw.getBoundingClientRect(),mx=cx-r.left,my=cy-r.top;
+    const ns=Math.min(Math.max(sc*d/lt,.1),20);
+    tx=mx-(mx-tx)*(ns/sc);ty=my-(my-ty)*(ns/sc);sc=ns;lt=d;apply();
+  }
+},{passive:false});
+mw.addEventListener("touchend",()=>{drag=false;});
+
+function openRegion(id,el){
+  // Réinitialiser l'ancien actif
+  if(activeEl && activeEl!==el){
+    activeEl.style.filter="";
+    activeEl.classList.remove("active");
+  }
+  el.classList.add("active");
+  el.style.filter="brightness(2.2) saturate(1.6) drop-shadow(0 0 6px rgba(255,255,255,0.65))";
+  activeEl=el;
+  const d=REGIONS[id];
+  const color=(d&&d.color)||"#5a5a7a";
+  document.getElementById("ph-dot").style.background=color;
+  document.getElementById("ph-name").textContent=d?d.name:id.replace("Border_","");
+  document.getElementById("ph-nation").textContent=d?d.nation:"";
+  const img=document.getElementById("pb-img"),ph=document.getElementById("pb-ph");
+  if(d&&d.image){img.src=d.image;img.style.display="block";ph.style.display="none";}
+  else{img.style.display="none";ph.style.display="block";}
+  document.getElementById("pb-desc").textContent=d?d.desc:"Aucune description disponible.";
+  const chars=document.getElementById("pb-chars");
+  chars.innerHTML="";
+  if(d){
+    [["Population",d.population],["Races",d.races],["Environnement",d.environment],
+     ["Niveau de danger",d.danger],["Personnages notables",d.characters],["Lieux notables",d.places]
+    ].forEach(([label,val])=>{
+      if(!val||val==="—")return;
+      const row=document.createElement("div");row.className="cr";
+      const l=document.createElement("div");l.className="cl";l.textContent=label;
+      const v=document.createElement("div");v.className="cv";
+      if(label==="Niveau de danger"&&typeof val==="number"){
+        v.textContent=DL[val]||val;v.style.color=DC[val]||"";
+      }else{v.textContent=val;}
+      row.appendChild(l);row.appendChild(v);chars.appendChild(row);
+    });
+  }
+  panel.classList.add("open");
+}
+function closePanel(){
+  if(activeEl){activeEl.style.filter="";activeEl.classList.remove("active");activeEl=null;}
+  panel.classList.remove("open");
+}
+
+loadMap().catch(e=>{
+  document.getElementById("loading").innerHTML=`<p style="color:#6a3a3a;font-size:13px;text-align:center;padding:20px">Erreur de chargement.<br><small>${e.message}</small></p>`;
+});
+</script>
+</body>
+</html>
